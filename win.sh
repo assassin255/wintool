@@ -56,7 +56,7 @@ EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -fuse-ld=lld -
 LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
 echo "🔁 Đang Biên Dịch..."
-../qemu-src/configure \
+silent ../qemu-src/configure \
 --prefix=/opt/qemu-optimized \
 --target-list=x86_64-softmmu \
 --enable-tcg \
