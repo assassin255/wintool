@@ -10,8 +10,8 @@ else
 LLVM_VER=15
 fi
 
-silent sudo apt update
-silent sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools ovmf linux-perf
+sudo apt update
+sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools ovmf linux-perf
 
 export PATH="/usr/lib/llvm-$LLVM_VER/bin:$PATH"
 export CC="clang-$LLVM_VER"
@@ -20,20 +20,21 @@ export LD="lld-$LLVM_VER"
 
 python3 -m venv ~/qemu-env
 source ~/qemu-env/bin/activate
-silent pip install --upgrade pip tomli packaging
+pip install --upgrade pip tomli packaging
 
 rm -rf /tmp/qemu-src /tmp/qemu-build
 cd /tmp
-silent git clone --depth 1 --branch v10.2.0 https://gitlab.com/qemu-project/qemu.git qemu-src
+git clone --depth 1 --branch v10.2.0 https://gitlab.com/qemu-project/qemu.git qemu-src
 mkdir /tmp/qemu-build
 cd /tmp/qemu-build
 
 echo "⚡ Phase 1: Build với PGO Generate"
 
 EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -fprofile-generate -fuse-ld=lld -fno-semantic-interposition -fno-plt -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector -funsafe-math-optimizations -ffinite-math-only -fno-math-errno -fstrict-aliasing -funroll-loops -finline-functions -finline-hint-functions -DNDEBUG -DDEFAULT_TCG_TB_SIZE=2097152"
+
 LDFLAGS="-flto=full -fprofile-generate -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
-silent ../qemu-src/configure \
+../qemu-src/configure \
 --prefix=/opt/qemu-optimized \
 --target-list=x86_64-softmmu \
 --enable-tcg \
@@ -52,7 +53,7 @@ silent ../qemu-src/configure \
 --disable-werror \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
-silent ninja -j"$(nproc)"
+ninja -j"$(nproc)"
 
 echo "⚡ Phase 1: Tạo profile data..."
 ./qemu-system-x86_64 -accel tcg -version > /dev/null 2>&1 || true
@@ -62,9 +63,10 @@ echo "⚡ Phase 2: Rebuild với PGO Use"
 rm -rf *
 
 EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -fprofile-use -fprofile-correction -fuse-ld=lld -fno-semantic-interposition -fno-plt -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector -funsafe-math-optimizations -ffinite-math-only -fno-math-errno -fstrict-aliasing -funroll-loops -finline-functions -finline-hint-functions -DNDEBUG -DDEFAULT_TCG_TB_SIZE=2097152"
+
 LDFLAGS="-flto=full -fprofile-use -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
-silent ../qemu-src/configure \
+../qemu-src/configure \
 --prefix=/opt/qemu-optimized \
 --target-list=x86_64-softmmu \
 --enable-tcg \
@@ -83,14 +85,14 @@ silent ../qemu-src/configure \
 --disable-werror \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
-silent ninja -j"$(nproc)"
-silent sudo ninja install
+ninja -j"$(nproc)"
+sudo ninja install
 
 echo "⚡ Phase 3: BOLT Optimization"
 
 QEMU_BIN="/opt/qemu-optimized/bin/qemu-system-x86_64"
 
-sudo perf record -F 999 -e cycles:u -o perf.data -- $QEMU_BIN -version > /dev/null 2>&1 || true
+sudo perf record -F 999 -e cycles:u -o perf.data -- $QEMU_BIN -accel tcg -version
 
 sudo llvm-bolt $QEMU_BIN \
 -o ${QEMU_BIN}.bolt \
@@ -102,8 +104,9 @@ sudo llvm-bolt $QEMU_BIN \
 -inline-all \
 -dyno-stats
 
-silent sudo mv ${QEMU_BIN}.bolt $QEMU_BIN
+sudo mv ${QEMU_BIN}.bolt $QEMU_BIN
 
 export PATH="/opt/qemu-optimized/bin:$PATH"
 qemu-system-x86_64 --version
+
 echo "🔥 QEMU ULTRA PGO + BOLT đã build xong"
