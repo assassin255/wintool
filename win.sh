@@ -82,6 +82,7 @@ silent ../qemu-src/configure \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
+echo "💣Nếu trong quá trình build bị lỗi hãy thử ulimit -n 84857"
 silent ninja -j"$(nproc)"
 silent sudo ninja install
 
