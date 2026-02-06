@@ -88,8 +88,6 @@ echo "🔁 Đang Biên Dịch..."
 --disable-libusb \
 --disable-seccomp \
 --disable-modules \
---disable-cirrus \
---disable-qxl \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
