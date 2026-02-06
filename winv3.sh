@@ -88,7 +88,6 @@ echo "🔁 Đang Biên Dịch..."
 --disable-libusb \
 --disable-seccomp \
 --disable-tcg-interpreter \
---disable-modules \
 --disable-pie \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
