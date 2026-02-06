@@ -90,6 +90,7 @@ echo "🔁 Đang Biên Dịch..."
 --disable-tcg-interpreter \
 --disable-trace-backends \
 --disable-modules \
+--disable-pie \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
