@@ -56,7 +56,7 @@ EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -f
 LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
 echo "🔁 Đang Biên Dịch..."
-silent ../qemu-src/configure \
+../qemu-src/configure \
 --prefix=/opt/qemu-optimized \
 --target-list=x86_64-softmmu \
 --enable-tcg \
@@ -83,6 +83,10 @@ silent ../qemu-src/configure \
 --disable-alsa \
 --disable-oss \
 --disable-jack \
+--disable-gnutls \
+--disable-smartcard \
+--disable-libusb \
+--disable-seccomp \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
