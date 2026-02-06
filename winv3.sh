@@ -52,7 +52,7 @@ silent git clone --depth 1 --branch v10.2.0 https://gitlab.com/qemu-project/qemu
 mkdir /tmp/qemu-build
 cd /tmp/qemu-build
 
-EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -fuse-ld=lld -fno-rtti -fno-exceptions -fmerge-all-constants -fno-semantic-interposition -fno-plt -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector -funsafe-math-optimizations -ffinite-math-only -fno-math-errno -fstrict-aliasing -funroll-loops -finline-functions -finline-hint-functions -DNDEBUG -DDEFAULT_TCG_TB_SIZE=2097152"
+EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -fuse-ld=lld -fno-rtti -fno-exceptions -fmerge-all-constants -fno-semantic-interposition -fno-plt -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector -funsafe-math-optimizations -ffinite-math-only -fno-math-errno -fstrict-aliasing -funroll-loops -finline-functions -finline-hint-functions -DNDEBUG -DDEFAULT_TCG_TB_SIZE=3097152"
 LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
 echo "🔁 Đang Biên Dịch..."
@@ -196,7 +196,7 @@ qemu-system-x86_64 \
 -cpu "$cpu_model" \
 -smp "$cpu_core" \
 -m "${ram_size}G" \
--accel tcg,thread=multi,tb-size=2097152 \
+-accel tcg,thread=multi,tb-size=3097152 \
 -rtc base=localtime \
 $BIOS_OPT \
 -drive file=win.img,if=virtio,cache=unsafe,aio=threads,format=raw \
