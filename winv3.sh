@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-
+#1
 silent() {
 "$@" > /dev/null 2>&1
 }
