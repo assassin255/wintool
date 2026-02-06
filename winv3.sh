@@ -87,7 +87,6 @@ echo "🔁 Đang Biên Dịch..."
 --disable-smartcard \
 --disable-libusb \
 --disable-seccomp \
---disable-tcg-interpreter \
 --disable-modules \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
