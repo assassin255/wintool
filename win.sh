@@ -79,6 +79,10 @@ silent ../qemu-src/configure \
 --disable-vvfat \
 --disable-cloop \
 --disable-dmg \
+--disable-pa \
+--disable-alsa \
+--disable-oss \
+--disable-jack \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
