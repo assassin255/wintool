@@ -187,7 +187,7 @@ BIOS_OPT=""
 fi
 
 qemu-system-x86_64 \
--machine q35,hpet=off,pit=off \
+-machine q35,hpet=off \
 -cpu "$cpu_model" \
 -smp "$cpu_core" \
 -m "${ram_size}G" \
