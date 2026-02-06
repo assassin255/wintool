@@ -83,10 +83,6 @@ silent ../qemu-src/configure \
 --disable-alsa \
 --disable-oss \
 --disable-jack \
---disable-gnutls \
---disable-smartcard \
---disable-libusb \
---disable-seccomp \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
