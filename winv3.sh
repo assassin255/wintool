@@ -94,8 +94,8 @@ CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDF
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
 echo "💣Nếu trong quá trình build bị lỗi hãy thử ulimit -n 84857"
-silent ninja -j"$(nproc)"
-silent sudo ninja install
+ninja -j"$(nproc)"
+sudo ninja install
 
 export PATH="/opt/qemu-optimized/bin:$PATH"
 qemu-system-x86_64 --version
