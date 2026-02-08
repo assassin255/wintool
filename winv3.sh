@@ -150,7 +150,7 @@ echo "🪟 Chọn phiên bản Windows muốn tải:"
 echo "1️⃣ Windows Server 2012 R2 x64"
 echo "2️⃣ Windows Server 2022 x64"
 echo "3️⃣ Windows 11 LTSB x64"
-echo "4️⃣ Windows 10 LTSB Build 10075 x64"
+echo "4️⃣ Windows 10 LTSB Build x64"
 read -rp "👉 Nhập số [1-3]: " win_choice
 
 case "$win_choice" in
