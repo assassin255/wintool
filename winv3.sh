@@ -187,6 +187,12 @@ cpu_core="${cpu_core:-4}"
 read -rp "💾 RAM GB (default 4): " ram_size
 ram_size="${ram_size:-4}"
 
+if [[ "$win_choice" == "4" ]]; then
+NET_DEVICE="-device e1000e,netdev=n0"
+else
+NET_DEVICE="-device virtio-net-pci,netdev=n0"
+fi
+
 if [[ "$USE_UEFI" == "yes" ]]; then
 BIOS_OPT="-bios /usr/share/qemu/OVMF.fd"
 else
@@ -203,7 +209,7 @@ qemu-system-x86_64 \
 $BIOS_OPT \
 -drive file=win.img,if=virtio,cache=unsafe,aio=threads,format=raw \
 -netdev user,id=n0,hostfwd=tcp::3389-:3389 \
--device virtio-net-pci,netdev=n0 \
+$NET_DEVICE \
 -device virtio-mouse-pci \
 -device virtio-keyboard-pci \
 -nodefaults \
