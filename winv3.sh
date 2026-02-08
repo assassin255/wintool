@@ -161,13 +161,16 @@ case "$win_choice" in
 *) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no" ;;
 esac
 
-if [[ "$win_choice" == "3" ]]; then
+case "$win_choice" in
+3|4)
 RDP_USER="Admin"
 RDP_PASS="Tam255Z"
-else
+;;
+*)
 RDP_USER="administrator"
 RDP_PASS="Tamnguyenyt@123"
-fi
+;;
+esac
 
 echo "🪟 Đang Tải $WIN_NAME..."
 if [[ ! -f win.img ]]; then
