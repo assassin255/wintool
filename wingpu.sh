@@ -18,10 +18,6 @@ fi
 choice=$(ask "👉 Bạn có muốn build QEMU để tạo VM với tăng tốc LLVM không ? (y/n): " "n")
 
 if [[ "$choice" == "y" ]]; then
-if [ -x /opt/qemu-optimized/bin/qemu-system-x86_64 ]; then
-echo "⚡ QEMU ULTRA đã tồn tại — skip build"
-export PATH="/opt/qemu-optimized/bin:$PATH"
-else
 echo "🚀 Đang Tải Các Apt Cần Thiết..."
 echo "⚠️ Nếu lỗi hãy thử dùng apt install sudo"
 
