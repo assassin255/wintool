@@ -48,7 +48,7 @@ silent pip install --upgrade pip tomli packaging
 
 rm -rf /tmp/qemu-src /tmp/qemu-build
 cd /tmp
-silent git clone --depth 1 --branch v10.2.0 https://gitlab.com/qemu-project/qemu.git qemu-src
+silent git clone --depth 1 --branch v10.2.1 https://gitlab.com/qemu-project/qemu.git qemu-src
 mkdir /tmp/qemu-build
 cd /tmp/qemu-build
 
