@@ -81,8 +81,8 @@ echo "🔁 Đang Biên Dịch..."
 --disable-libusb \
 --disable-seccomp \
 --disable-modules \
---enable-opengl
---enable-virglrenderer
+--enable-opengl \
+--enable-virglrenderer \
 CC="$CC" CXX="$CXX" LD="$LD" CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 
 echo "🕧 QEMU đang được build vui lòng đợi..."
