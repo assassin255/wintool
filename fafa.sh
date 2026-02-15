@@ -99,3 +99,4 @@ sudo ninja install
 export PATH="/opt/qemu-optimized/bin:$PATH"
 qemu-system-x86_64 --version
 echo "🔥 QEMU LLVM đã build xong"
+done
