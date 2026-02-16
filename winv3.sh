@@ -164,7 +164,7 @@ case "$win_choice" in
 esac
 
 case "$win_choice" in
-3|4)
+3|4|5)
 RDP_USER="Admin"
 RDP_PASS="Tam255Z"
 ;;
