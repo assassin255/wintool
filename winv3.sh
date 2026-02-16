@@ -150,14 +150,16 @@ echo "🪟 Chọn phiên bản Windows muốn tải:"
 echo "1️⃣ Windows Server 2012 R2 x64"
 echo "2️⃣ Windows Server 2022 x64"
 echo "3️⃣ Windows 11 LTSB x64"
-echo "4️⃣ Windows 10 LTSB Build x64"
+echo "4️⃣ Windows 10 LTSB 2015 x64"
+echo "5️⃣ Windows 10 LTSC 2023 x64"
 read -rp "👉 Nhập số [1-3]: " win_choice
 
 case "$win_choice" in
 1) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no" ;;
 2) WIN_NAME="Windows Server 2022"; WIN_URL="https://archive.org/download/tamnguyen-2022/2022.img"; USE_UEFI="no" ;;
 3) WIN_NAME="Windows 11 LTSB"; WIN_URL="https://archive.org/download/win_20260203/win.img"; USE_UEFI="yes" ;;
-4) WIN_NAME="Windows 10 LTSB"; WIN_URL="https://archive.org/download/win_20260208/win.img"; USE_UEFI="no" ;;
+4) WIN_NAME="Windows 10 LTSB 2015"; WIN_URL="https://archive.org/download/win_20260208/win.img"; USE_UEFI="no" ;;
+5) WIN_NAME="Windows 10 LTSC 2023"; WIN_URL="https://archive.org/download/win_20260215/win.img"; USE_UEFI="no" ;;
 *) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no" ;;
 esac
 
