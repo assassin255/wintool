@@ -28,8 +28,8 @@ echo "⚠️ Nếu lỗi hãy thử dùng apt install sudo"
 OS_ID="$(. /etc/os-release && echo "$ID")"
 OS_VER="$(. /etc/os-release && echo "$VERSION_ID")"
 
-silent sudo apt update
-silent sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 ovmf
+sudo apt update
+sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 ovmf
 
 if [[ "$OS_ID" == "ubuntu" ]]; then
 echo "🔥 Detect Ubuntu → Cài LLVM 21 từ apt.llvm.org"
@@ -64,7 +64,7 @@ EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe -flto=full -ffast-math -f
 LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
 echo "🔁 Đang Biên Dịch..."
-silent ../qemu-src/configure \
+../qemu-src/configure \
 --prefix=/opt/qemu-optimized \
 --target-list=x86_64-softmmu \
 --enable-tcg \
