@@ -56,7 +56,35 @@ sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-
 PYTHON_BIN="/usr/bin/python3"
 
 fi
+echo "🔎 Kiểm tra phiên bản glib..."
 
+GLIB_VER=$(pkg-config --modversion glib-2.0 2>/dev/null || echo "0.0.0")
+
+ver_lt() {
+[ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" != "$2" ]
+}
+
+if ver_lt "$GLIB_VER" "2.66"; then
+echo "⚠️ glib hiện tại: $GLIB_VER → Quá cũ, đang build glib mới..."
+
+sudo apt install -y meson ninja-build libffi-dev gettext
+
+cd /tmp
+wget https://download.gnome.org/sources/glib/2.76/glib-2.76.6.tar.xz
+tar -xf glib-2.76.6.tar.xz
+cd glib-2.76.6
+
+meson setup build --prefix=/usr/local
+ninja -C build
+sudo ninja -C build install
+
+export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
+
+echo "✅ glib mới: $(pkg-config --modversion glib-2.0)"
+else
+echo "✅ glib đủ yêu cầu: $GLIB_VER"
+fi
 python3 -m venv ~/qemu-env
 source ~/qemu-env/bin/activate
 silent pip install --upgrade pip tomli packaging
