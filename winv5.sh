@@ -32,23 +32,28 @@ sudo apt update
 sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 ovmf
 
 if [[ "$OS_ID" == "ubuntu" ]]; then
-echo "🔥 Detect Ubuntu → Cài LLVM 21 từ apt.llvm.org"
+echo "🔥 Detect Ubuntu → Cài LLVM 21 + Python 3.9"
+
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
 sudo ./llvm.sh 21
 LLVM_VER=21
+
+sudo apt install -y python3.9 python3.9-venv python3.9-distutils
+PYTHON_BIN="/usr/bin/python3.9"
+
 else
+
 if [[ "$OS_ID" == "debian" && "$OS_VER" == "13" ]]; then
 LLVM_VER=19
 else
 LLVM_VER=15
 fi
-silent sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
+
+sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
+PYTHON_BIN="/usr/bin/python3"
+
 fi
-export PATH="/usr/lib/llvm-$LLVM_VER/bin:$PATH"
-export CC="clang-$LLVM_VER"
-export CXX="clang++-$LLVM_VER"
-export LD="lld-$LLVM_VER"
 
 python3 -m venv ~/qemu-env
 source ~/qemu-env/bin/activate
