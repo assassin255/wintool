@@ -115,7 +115,6 @@ mkdir -p build && cd build
     --target-list=x86_64-softmmu \
     --python=$PY \
     --disable-werror \
-    --enable-trace-backends=nop \
     --disable-docs \
     --disable-guest-agent \
     --extra-ldflags="-lncurses" 
