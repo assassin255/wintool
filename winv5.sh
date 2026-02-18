@@ -41,7 +41,9 @@ LLVM_VER=21
 
 sudo apt install -y python3.9 python3.9-venv python3.9-distutils
 PYTHON_BIN="/usr/bin/python3.9"
-
+sudo /usr/bin/python3.9 -m ensurepip --upgrade || true
+sudo /usr/bin/python3.9 -m pip install --upgrade pip
+sudo /usr/bin/python3.9 -m pip install tomli packaging
 else
 
 if [[ "$OS_ID" == "debian" && "$OS_VER" == "13" ]]; then
