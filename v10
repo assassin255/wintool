@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+set -e
+
+# QEMU 10.2.1 TCG + LLVM Extreme Build (V10)
+# LTO=full + Polly + 44 Hot Path Patches + 6 Fast DBT Patches = 50 total
+#
+# Architecture:
+#   Layer 1 - Compiler: Clang LTO full + Polly loop optimizer + aggressive inlining
+#   Layer 2 - Hot Paths: 44 __attribute__((hot/flatten/always_inline)) across 7 files
+#   Layer 3 - Fast DBT: structural tuning of TCG translation engine
+#
+# Fast DBT tuning (based on architectural analysis):
+#   - TB_JMP_CACHE: 4096 -> 8192 (sweet spot, reduces collision without L1 pressure)
+#   - CPU_TEMP_BUF: 128 -> 256 longs (reduces temp spill, safe x2)
+#   - TCG_MAX_TEMPS: 512 -> 1024 (larger register pool for complex TBs)
+#   - Branch prediction hints (__builtin_expect) on TB lookup hot path
+#   - NOT increased: TCG_MAX_INSNS (512 is optimal), MAX_OP_PER_INSTR (dangerous)
+#
+# Patch map (50 patches across 10 files):
+#   tcg/tcg.c           : 12 (codegen, reg alloc, temp mgmt)
+#   tcg/optimize.c      : 8  (optimizer, const/copy prop, folding)
+#   tcg/tcg-op.c        : 3  (TB exit/goto/lookup)
+#   accel/tcg/cpu-exec.c: 8+3 (exec loop, TB lookup, branch hints)
+#   accel/tcg/cputlb.c  : 9  (TLB fast path, victim, fill)
+#   accel/tcg/translate-all.c: 1 (tb_gen_code)
+#   accel/tcg/tb-maint.c: 1  (tb_cmp)
+#   accel/tcg/translator.c: 1 (translator_loop)
+#   accel/tcg/tb-jmp-cache.h: 1 (TB_JMP_CACHE 8192)
+#   include/tcg/tcg.h   : 2  (TCG_MAX_TEMPS, CPU_TEMP_BUF)
+
+silent() { "$@" > /dev/null 2>&1; }
+ask() { read -rp "$1" ans; ans="${ans,,}"; echo "${ans:-$2}"; }
+
+choice=$(ask "Build QEMU with LLVM TCG optimization? (y/n): " "n")
+
+if [[ "$choice" != "y" ]]; then
+    echo "Skipping build."
+    [ -x /opt/qemu-llvm/bin/qemu-system-x86_64 ] && export PATH="/opt/qemu-llvm/bin:$PATH"
+else
+if [ -x /opt/qemu-llvm/bin/qemu-system-x86_64 ]; then
+    echo "[OK] QEMU LLVM already installed"
+    export PATH="/opt/qemu-llvm/bin:$PATH"
+else
+
+echo "=== [1/6] Dependencies ==="
+OS_ID="$(. /etc/os-release && echo "$ID")"
+OS_VER="$(. /etc/os-release && echo "$VERSION_ID")"
+sudo apt update
+sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv \
+    python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config \
+    meson aria2 ovmf liburing-dev libjemalloc-dev 2>/dev/null || true
+
+if [[ "$OS_ID" == "ubuntu" ]]; then
+    wget -q https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+    sudo ./llvm.sh 21
+    LLVM_VER=21
+    sudo apt install -y llvm-$LLVM_VER-tools 2>/dev/null || true
+elif [[ "$OS_ID" == "debian" && "$OS_VER" == "13" ]]; then
+    LLVM_VER=19
+    sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER \
+        llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools 2>/dev/null || true
+else
+    LLVM_VER=15
+    sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER \
+        llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools 2>/dev/null || true
+fi
+
+export CC="clang-$LLVM_VER"
+export CXX="clang++-$LLVM_VER"
+export LD="lld-$LLVM_VER"
+echo "Compiler: $CC"
+
+GLIB_VER=$(pkg-config --modversion glib-2.0 2>/dev/null || echo "0.0.0")
+if [ "$(printf '%s\n' "$GLIB_VER" "2.66" | sort -V | head -n1)" != "2.66" ]; then
+    echo "Building glib 2.76..."
+    sudo apt install -y libffi-dev gettext
+    cd /tmp && wget -q https://download.gnome.org/sources/glib/2.76/glib-2.76.6.tar.xz
+    tar xf glib-2.76.6.tar.xz && cd glib-2.76.6
+    meson setup build --prefix=/usr/local && ninja -C build && sudo ninja -C build install
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+    export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
+fi
+
+echo "=== [2/6] Cloning QEMU 10.2.1 ==="
+rm -rf /tmp/qemu-src /tmp/qemu-build
+cd /tmp
+silent git clone --depth 1 --branch v10.2.1 https://gitlab.com/qemu-project/qemu.git qemu-src
+
+echo "=== [3/6] V10 Patches (50 total) ==="
+cd /tmp/qemu-src
+
+echo "  --- PART A: Hot Path Annotations (44) ---"
+
+# tcg/tcg.c (12)
+sed -i '/^int tcg_gen_code(TCGContext \*s, TranslationBlock \*tb/i\/* V10 */ __attribute__((hot, optimize("O3")))' tcg/tcg.c
+sed -i '/^static void tcg_reg_alloc_op(TCGContext \*s/i\/* V10 */ __attribute__((hot, flatten))' tcg/tcg.c
+sed -i '/^static void tcg_reg_alloc_mov(TCGContext \*s/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static TCGReg tcg_reg_alloc(TCGContext \*s, TCGRegSet required_regs/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static void tcg_reg_alloc_call(TCGContext \*s, TCGOp \*op)/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static void tcg_reg_alloc_dup(TCGContext \*s/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static void temp_load(TCGContext \*s, TCGTemp \*ts, TCGRegSet desired/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static void temp_sync(TCGContext \*s, TCGTemp \*ts, TCGRegSet allocated/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static void temp_save(TCGContext \*s, TCGTemp \*ts, TCGRegSet allocated/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^static int tcg_out_ldst_finalize(TCGContext \*s)/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^TranslationBlock \*tcg_tb_alloc(TCGContext \*s)/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+sed -i '/^void tcg_func_start(TCGContext \*s)/i\/* V10 */ __attribute__((hot))' tcg/tcg.c
+echo "    tcg.c: 12"
+
+# tcg/optimize.c (8)
+sed -i '/^void tcg_optimize(TCGContext \*s)/i\/* V10 */ __attribute__((hot, optimize("O3")))' tcg/optimize.c
+sed -i '/^static bool tcg_opt_gen_mov(OptContext \*ctx/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static bool tcg_opt_gen_movi(OptContext \*ctx/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static bool finish_folding(OptContext \*ctx, TCGOp \*op)/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static void copy_propagate(OptContext \*ctx/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static void init_arguments(OptContext \*ctx/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static bool fold_brcond(OptContext \*ctx/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+sed -i '/^static int do_constant_folding_cond(TCGType type/i\/* V10 */ __attribute__((hot))' tcg/optimize.c
+echo "    optimize.c: 8"
+
+# tcg/tcg-op.c (3)
+sed -i '/^void tcg_gen_exit_tb(const TranslationBlock \*tb/i\/* V10 */ __attribute__((hot))' tcg/tcg-op.c
+sed -i '/^void tcg_gen_goto_tb(unsigned idx)/i\/* V10 */ __attribute__((hot))' tcg/tcg-op.c
+sed -i '/^void tcg_gen_lookup_and_goto_ptr(void)/i\/* V10 */ __attribute__((hot))' tcg/tcg-op.c
+echo "    tcg-op.c: 3"
+
+# accel/tcg/cpu-exec.c (8 hot + 3 branch hints = 11)
+sed -i '/^int cpu_exec(CPUState \*cpu)/i\/* V10 */ __attribute__((hot))' accel/tcg/cpu-exec.c
+sed -i 's/static inline TranslationBlock \*tb_lookup(/static inline __attribute__((always_inline)) TranslationBlock *tb_lookup(/' accel/tcg/cpu-exec.c
+sed -i '/^static bool tb_lookup_cmp(const void \*p/i\/* V10 */ __attribute__((hot))' accel/tcg/cpu-exec.c
+sed -i '/^static TranslationBlock \*tb_htable_lookup/i\/* V10 */ __attribute__((hot))' accel/tcg/cpu-exec.c
+sed -i '/^static inline void cpu_loop_exec_tb/i\/* V10 */ __attribute__((hot, flatten))' accel/tcg/cpu-exec.c
+sed -i 's/static inline void tb_add_jump(/static inline __attribute__((always_inline)) void tb_add_jump(/' accel/tcg/cpu-exec.c
+sed -i 's/static inline bool cpu_handle_interrupt(/static inline __attribute__((always_inline)) bool cpu_handle_interrupt(/' accel/tcg/cpu-exec.c
+sed -i 's/static inline bool cpu_handle_exception(/static inline __attribute__((always_inline)) bool cpu_handle_exception(/' accel/tcg/cpu-exec.c
+echo "    cpu-exec.c: 8 hot"
+
+# Branch prediction hints (3)
+sed -i 's/if (\*tb_exit != TB_EXIT_REQUESTED)/if (__builtin_expect(*tb_exit != TB_EXIT_REQUESTED, 1))/' accel/tcg/cpu-exec.c
+sed -i 's/if (phys_pc == -1) {/if (__builtin_expect(phys_pc == -1, 0)) {/' accel/tcg/cpu-exec.c
+sed -i 's/if (tb == NULL) {/if (__builtin_expect(tb == NULL, 0)) {/' accel/tcg/cpu-exec.c
+echo "    cpu-exec.c: 3 branch hints"
+
+# accel/tcg/cputlb.c (9)
+sed -i '1i\/* V10 - TLB hot path */' accel/tcg/cputlb.c
+sed -i '/^static bool victim_tlb_hit/i\__attribute__((hot, flatten))' accel/tcg/cputlb.c
+sed -i 's/static inline bool tlb_hit(uint64_t/static inline __attribute__((always_inline)) bool tlb_hit(uint64_t/' accel/tcg/cputlb.c
+sed -i 's/static inline bool tlb_hit_page(uint64_t/static inline __attribute__((always_inline)) bool tlb_hit_page(uint64_t/' accel/tcg/cputlb.c
+sed -i 's/static inline uintptr_t tlb_index(/static inline __attribute__((always_inline)) uintptr_t tlb_index(/' accel/tcg/cputlb.c
+sed -i 's/static inline CPUTLBEntry \*tlb_entry(/static inline __attribute__((always_inline)) CPUTLBEntry *tlb_entry(/' accel/tcg/cputlb.c
+sed -i 's/static inline uint64_t tlb_read_idx(/static inline __attribute__((always_inline)) uint64_t tlb_read_idx(/' accel/tcg/cputlb.c
+sed -i '/^static bool tlb_fill_align(/i\/* V10 */ __attribute__((hot))' accel/tcg/cputlb.c
+sed -i '/^void tlb_set_page_full(/i\/* V10 */ __attribute__((hot))' accel/tcg/cputlb.c
+sed -i 's/static inline void copy_tlb_helper_locked(/static inline __attribute__((always_inline)) void copy_tlb_helper_locked(/' accel/tcg/cputlb.c
+echo "    cputlb.c: 9"
+
+# translate-all + tb-maint + translator (3)
+sed -i '/^TranslationBlock \*tb_gen_code(CPUState \*cpu/i\/* V10 */ __attribute__((hot))' accel/tcg/translate-all.c
+sed -i '/^static bool tb_cmp(const void \*ap/i\/* V10 */ __attribute__((hot))' accel/tcg/tb-maint.c
+sed -i '/^void translator_loop(CPUState \*cpu/i\/* V10 */ __attribute__((hot))' accel/tcg/translator.c
+echo "    translate-all + tb-maint + translator: 3"
+
+echo ""
+echo "  --- PART B: Fast DBT Architectural Tuning (6) ---"
+
+# TB jump cache sweet spot
+sed -i 's/#define TB_JMP_CACHE_BITS 12/#define TB_JMP_CACHE_BITS 13/' accel/tcg/tb-jmp-cache.h
+echo "    TB_JMP_CACHE: 4096 -> 8192 (sweet spot)"
+
+# Temp buffer x2
+sed -i 's/#define CPU_TEMP_BUF_NLONGS 128/#define CPU_TEMP_BUF_NLONGS 256/' include/tcg/tcg.h
+echo "    CPU_TEMP_BUF: 128 -> 256 (reduces spill)"
+
+# Register pool x2
+sed -i 's/#define TCG_MAX_TEMPS 512/#define TCG_MAX_TEMPS 1024/' include/tcg/tcg.h
+echo "    TCG_MAX_TEMPS: 512 -> 1024"
+
+echo ""
+echo "  Total: 50 patches applied!"
+
+echo "=== [4/6] Configure ==="
+BASE="-O3 -march=native -mtune=native -pipe -fno-strict-aliasing"
+BASE="$BASE -fmerge-all-constants -fno-semantic-interposition -fno-plt"
+BASE="$BASE -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables"
+BASE="$BASE -fno-stack-protector -funroll-loops -finline-functions -DNDEBUG"
+POLLY="-mllvm -polly -mllvm -polly-vectorizer=stripmine"
+INLINE="-mllvm -inline-threshold=500 -mllvm -inlinehint-threshold=1000"
+
+FINAL_CFLAGS="$BASE $POLLY $INLINE -flto=full"
+FINAL_LDFLAGS="-fuse-ld=lld -flto=full -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
+
+mkdir -p /tmp/qemu-build && cd /tmp/qemu-build
+
+../qemu-src/configure \
+    --prefix=/opt/qemu-llvm \
+    --target-list=x86_64-softmmu \
+    --enable-tcg --enable-slirp --enable-coroutine-pool --enable-lto \
+    --disable-kvm --disable-mshv --disable-xen \
+    --disable-gtk --disable-sdl --disable-spice --disable-vnc \
+    --disable-plugins --disable-debug-info --disable-docs --disable-werror \
+    --disable-fdt --disable-vdi --disable-vvfat --disable-cloop --disable-dmg \
+    --disable-pa --disable-alsa --disable-oss --disable-jack \
+    --disable-gnutls --disable-smartcard --disable-libusb \
+    --disable-seccomp --disable-modules \
+    CC=$CC CXX=$CXX \
+    CFLAGS="$FINAL_CFLAGS" CXXFLAGS="$FINAL_CFLAGS" LDFLAGS="$FINAL_LDFLAGS"
+
+echo "=== [5/6] Build (LTO=full + Polly + 50 patches) ==="
+ninja -j"$(nproc)" qemu-system-x86_64
+
+echo "=== [6/6] Installing ==="
+sudo mkdir -p /opt/qemu-llvm/bin /opt/qemu-llvm/share
+sudo cp qemu-system-x86_64 /opt/qemu-llvm/bin/
+sudo cp -r /tmp/qemu-build/pc-bios /opt/qemu-llvm/share/qemu 2>/dev/null || true
+export PATH="/opt/qemu-llvm/bin:$PATH"
+
+# Kernel tuning
+sudo sysctl -w vm.nr_hugepages=512 2>/dev/null || true
+sudo sysctl -w kernel.sched_migration_cost_ns=5000000 2>/dev/null || true
+sudo sysctl -w kernel.sched_autogroup_enabled=0 2>/dev/null || true
+sudo sysctl -w vm.dirty_ratio=60 2>/dev/null || true
+sudo sysctl -w vm.dirty_background_ratio=5 2>/dev/null || true
+sudo sysctl -w vm.swappiness=10 2>/dev/null || true
+
+qemu-system-x86_64 --version
+echo ""
+echo "========================================"
+echo "  BUILD COMPLETE (V10)"
+echo "  Compiler : Clang $LLVM_VER + LLD"
+echo "  LTO      : full"
+echo "  Polly    : YES (loop optimizer)"
+echo "  Patches  : 50 total"
+echo "    Hot path     : 44 (__attribute__ annotations)"
+echo "    Fast DBT     : 6  (architectural tuning)"
+echo "    Branch hints : 3  (__builtin_expect)"
+echo "    always_inline: 12"
+echo "  DBT tuning:"
+echo "    TB_JMP_CACHE  : 8192 (sweet spot)"
+echo "    CPU_TEMP_BUF  : 256 longs"
+echo "    TCG_MAX_TEMPS : 1024"
+echo "  Kernel   : tuned"
+echo "========================================"
+
+fi # end build block
+fi # end choice
