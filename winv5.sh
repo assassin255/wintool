@@ -32,12 +32,12 @@ sudo apt update
 sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 ovmf
 
 if [[ "$OS_ID" == "ubuntu" ]]; then
-echo "🔥 Detect Ubuntu → Cài LLVM 21 + Python 3.9"
+echo "🔥 Detect Ubuntu → Cài LLVM 19 + Python 3.9"
 
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-sudo ./llvm.sh 21
-LLVM_VER=21
+sudo ./llvm.sh 19
+LLVM_VER=19
 
 sudo apt install -y python3.9 python3.9-venv python3.9-distutils
 PYTHON_BIN="/usr/bin/python3.9"
