@@ -68,9 +68,9 @@ if [[ "$choice" == "y" ]]; then
         fi
 
         python3 -m venv ~/qemu-env
-        source ~/qemu-env/bin/activate
-        silent pip install --upgrade pip tomli packaging
-
+source ~/qemu-env/bin/activate
+pip install --upgrade pip
+pip install meson ninja tomli packaging
         rm -rf /tmp/qemu-src /tmp/qemu-build
         cd /tmp
         echo "📂 Đang tải source QEMU v10.2.2"
