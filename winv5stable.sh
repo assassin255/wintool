@@ -74,7 +74,7 @@ if [[ "$choice" == "y" ]]; then
         rm -rf /tmp/qemu-src /tmp/qemu-build
         cd /tmp
         echo "📂 Đang tải source QEMU v11.0.0-rc1..."
-        silent git clone --depth 1 --branch v11.0.0-rc1 https://gitlab.com/qemu-project/qemu.git qemu-src
+        silent git clone --depth 1 --branch v10.2.2 https://gitlab.com/qemu-project/qemu.git qemu-src
         mkdir /tmp/qemu-build
         cd /tmp/qemu-build
 
