@@ -40,11 +40,17 @@ if [[ "$choice" == "y" ]]; then
             LLVM_VER=15
             sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
             PYTHON_BIN="/usr/bin/python3"
+            export CC="clang-$LLVM_VER"
+export CXX="clang++-$LLVM_VER"
+export LD="lld-$LLVM_VER"
         else
             echo "🔥 Detect Debian/Other → dùng LLVM 15"
             LLVM_VER=15
             sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
             PYTHON_BIN="/usr/bin/python3"
+            export CC="clang-$LLVM_VER"
+export CXX="clang++-$LLVM_VER"
+export LD="lld-$LLVM_VER"
         fi
 
         echo "🔎 Kiểm tra phiên bản glib..."
