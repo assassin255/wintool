@@ -32,33 +32,32 @@ sudo apt update
 sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config meson aria2 ovmf
 
 if [[ "$OS_ID" == "ubuntu" ]]; then
-echo "🔥 Detect Ubuntu → Cài LLVM 19 + Python 3.9"
+echo "🔥 Detect Ubuntu → Cài LLVM 15 + Python 3.9"
 
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-sudo ./llvm.sh 19
-LLVM_VER=19
 
-sudo apt install -y python3.9 python3.9-venv python3.9-distutils
-PYTHON_BIN="/usr/bin/python3.9"
-sudo /usr/bin/python3.9 -m ensurepip --upgrade || true
-sudo /usr/bin/python3.9 -m pip install --upgrade pip
-sudo /usr/bin/python3.9 -m pip install tomli packaging
+echo "🔎 Kiểm tra phiên bản glib..."
+
+GLIB_VER=$(pkg-config --modif [[ "$OS_ID" == "ubuntu" ]]; then
+echo "🔥 Detect Ubuntu → dùng LLVM 15 từ apt"
+
+LLVM_VER=15
+sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
+
+PYTHON_BIN="/usr/bin/python3"
+
 else
 
 if [[ "$OS_ID" == "debian" && "$OS_VER" == "13" ]]; then
-LLVM_VER=19
+LLVM_VER=15
 else
 LLVM_VER=15
 fi
 
 sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
+
 PYTHON_BIN="/usr/bin/python3"
 
-fi
-echo "🔎 Kiểm tra phiên bản glib..."
-
-GLIB_VER=$(pkg-config --modversion glib-2.0 2>/dev/null || echo "0.0.0")
+fiversion glib-2.0 2>/dev/null || echo "0.0.0")
 
 ver_lt() {
 [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" != "$2" ]
