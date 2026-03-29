@@ -90,6 +90,9 @@ hash -r
         LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3"
 
         echo "🔁 Đang Cấu hình QEMU..."
+        export CC=clang-$LLVM_VER
+export CXX=clang++-$LLVM_VER
+export LD=lld-$LLVM_VER
         ../qemu-src/configure \
         --prefix=/opt/qemu-optimized \
         --target-list=x86_64-softmmu \
@@ -122,8 +125,6 @@ hash -r
         --disable-libusb \
         --disable-seccomp \
         --disable-modules \
-        --cc=clang-$LLVM_VER \
-        --cxx=clang++-$LLVM_VER \
         --extra-cflags="$EXTRA_CFLAGS" \
         --extra-ldflags="$LDFLAGS"
 
