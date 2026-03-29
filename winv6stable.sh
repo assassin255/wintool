@@ -71,6 +71,8 @@ if [[ "$choice" == "y" ]]; then
 source ~/qemu-env/bin/activate
 pip install --upgrade pip
 pip install meson ninja tomli packaging
+sudo apt remove -y meson
+hash -r
         rm -rf /tmp/qemu-src /tmp/qemu-build
         cd /tmp
         echo "📂 Đang tải source QEMU v10.2.2"
