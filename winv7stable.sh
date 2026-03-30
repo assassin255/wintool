@@ -38,14 +38,24 @@ if [[ "$choice" == "y" ]]; then
         sudo apt install -y wget gnupg build-essential ninja-build git python3 python3-venv python3-pip libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev pkg-config aria2 ovmf
 
         # Thiết lập Compiler LLVM 15
-        LLVM_VER=15
-        echo "🔥 Cài đặt LLVM $LLVM_VER..."
-        sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
-
-        # Xuất biến môi trường Compiler
-        export CC="clang-$LLVM_VER"
-        export CXX="clang++-$LLVM_VER"
-        export LD="lld-$LLVM_VER"
+        if [[ "$OS_ID" == "ubuntu" ]]; then
+echo "🔥 Detect Ubuntu → Cài LLVM 21 từ apt.llvm.org"
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 21
+LLVM_VER=21
+else
+if [[ "$OS_ID" == "debian" && "$OS_VER" == "13" ]]; then
+LLVM_VER=19
+else
+LLVM_VER=15
+fi
+silent sudo apt install -y clang-$LLVM_VER lld-$LLVM_VER llvm-$LLVM_VER llvm-$LLVM_VER-dev llvm-$LLVM_VER-tools
+fi
+export PATH="/usr/lib/llvm-$LLVM_VER/bin:$PATH"
+export CC="clang-$LLVM_VER"
+export CXX="clang++-$LLVM_VER"
+export LD="lld-$LLVM_VER"
 
         # Kiểm tra glib
         echo "🔎 Kiểm tra phiên bản glib..."
