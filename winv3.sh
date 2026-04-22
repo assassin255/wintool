@@ -217,7 +217,7 @@ qemu-system-x86_64 \
 -cpu "$cpu_model" \
 -smp "$cpu_core" \
 -m "${ram_size}G" \
--accel tcg,thread=multi,tb-size=3097152 \
+-accel tcg,thread=multi,tb-size=5097152 \
 -rtc base=localtime \
 $BIOS_OPT \
 -drive file=win.img,if=virtio,cache=unsafe,aio=threads,format=raw \
