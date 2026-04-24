@@ -223,11 +223,84 @@ qemu-img resize win.img "+${extra_gb}G"
 cpu_host=$(grep -m1 "model name" /proc/cpuinfo | sed 's/^.*: //')
 cpu_model="qemu64,hypervisor=off,tsc=on,invtsc=on,pmu=off,l3-cache=on,+cmov,+mmx,+fxsr,+sse2,+ssse3,+sse4.1,+sse4.2,+popcnt,+aes,+cx16,+x2apic,+sep,+pat,+pse,model-id=${cpu_host}"
 
-read -rp "⚙ CPU core (default 4): " cpu_core
-cpu_core="${cpu_core:-4}"
+echo ""
+echo "════════════════════════════════════"
+echo "⚙ CHỌN CHẾ ĐỘ CẤU HÌNH VM"
+echo "════════════════════════════════════"
+echo "1️⃣ Auto cấu hình (khuyên dùng)"
+echo "2️⃣ Tự chọn thủ công"
+echo "════════════════════════════════════"
 
-read -rp "💾 RAM GB (default 4): " ram_size
-ram_size="${ram_size:-4}"
+read -rp "👉 Nhập lựa chọn [1-2]: " cfg_mode
+
+if [[ "$cfg_mode" == "1" ]]; then
+
+    echo ""
+    echo "🧠 AUTO DETECT HOST RESOURCE..."
+
+    # --- CPU DETECT ---
+    cpu_v=$(nproc 2>/dev/null)
+    cpu_u=$cpu_v
+
+    if [ -f /sys/fs/cgroup/cpu.max ]; then
+        read q p < /sys/fs/cgroup/cpu.max
+        if [ "$q" != "max" ] 2>/dev/null; then
+            cpu_u=$(awk "BEGIN{printf \"%.0f\",$q/$p}")
+        fi
+    elif [ -f /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+        q=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+        p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+        if [ "$q" != "-1" ] 2>/dev/null; then
+            cpu_u=$(awk "BEGIN{printf \"%.0f\",$q/$p}")
+        fi
+    fi
+
+    # --- RAM DETECT ---
+    mem_total_gb=$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
+
+    # Lấy 85% RAM và làm tròn chuẩn (.5 lên)
+    mem_auto_gb=$(awk "BEGIN{printf \"%d\", ($mem_total_gb*0.85)+0.5}")
+
+    swap_gb=$(awk '/SwapTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
+
+    echo "CPU: thấy=$cpu_v | usable=$cpu_u"
+    echo "RAM: total=${mem_total_gb}GB | auto=${mem_auto_gb}GB | swap=${swap_gb}GB"
+
+    cpu_core=$cpu_u
+    ram_size=$mem_auto_gb
+
+    # --- RAM TỐI THIỂU ---
+    if [ "$ram_size" -lt 2 ]; then
+        ram_size=2
+    fi
+
+    # --- SAFETY LIMIT CPU ---
+    if [ "$cpu_core" -gt "$cpu_v" ]; then
+        cpu_core=$cpu_v
+    fi
+
+    # --- SAFETY LIMIT RAM ---
+    max_ram=$((mem_total_gb - 1))
+
+    if [ "$ram_size" -gt "$max_ram" ]; then
+        ram_size=$max_ram
+    fi
+
+    echo ""
+    echo "⚙ AUTO CONFIG SELECTED:"
+    echo "CPU cores : $cpu_core"
+    echo "RAM size  : ${ram_size} GB"
+
+else
+
+    echo ""
+    read -rp "⚙ CPU core (default 4): " cpu_core
+    cpu_core="${cpu_core:-4}"
+
+    read -rp "💾 RAM GB (default 4): " ram_size
+    ram_size="${ram_size:-4}"
+
+fi
 
 # Thiết lập Card mạng
 if [[ "$win_choice" == "4" ]]; then
