@@ -255,10 +255,15 @@ if [[ "$cfg_mode" == "1" ]]; then
         fi
     fi
 
+    # --- FIX CPU KHÔNG ĐƯỢC = 0 ---
+    if [ "$cpu_u" -lt 1 ]; then
+        cpu_u=1
+    fi
+
     # --- RAM DETECT ---
     mem_total_gb=$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
 
-    # Lấy 85% RAM và làm tròn chuẩn (.5 lên)
+    # --- ROUND CHUẨN (.5 lên) ---
     mem_auto_gb=$(awk "BEGIN{printf \"%d\", ($mem_total_gb*0.85)+0.5}")
 
     swap_gb=$(awk '/SwapTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
@@ -274,12 +279,12 @@ if [[ "$cfg_mode" == "1" ]]; then
         ram_size=2
     fi
 
-    # --- SAFETY LIMIT CPU ---
+    # --- SAFETY CPU ---
     if [ "$cpu_core" -gt "$cpu_v" ]; then
         cpu_core=$cpu_v
     fi
 
-    # --- SAFETY LIMIT RAM ---
+    # --- SAFETY RAM ---
     max_ram=$((mem_total_gb - 1))
 
     if [ "$ram_size" -gt "$max_ram" ]; then
@@ -294,6 +299,7 @@ if [[ "$cfg_mode" == "1" ]]; then
 else
 
     echo ""
+
     read -rp "⚙ CPU core (default 4): " cpu_core
     cpu_core="${cpu_core:-4}"
 
