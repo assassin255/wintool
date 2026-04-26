@@ -74,7 +74,7 @@ if [[ "$choice" == "y" ]]; then
         OS_VER="$(. /etc/os-release && echo "$VERSION_ID")"
 
         sudo apt update
-        sudo apt install -y wget gnupg build-essential ninja-build git \
+        sudo apt install -y lsb-release wget software-properties-common gnupg wget gnupg build-essential ninja-build git \
             python3 python3-venv python3-pip \
             libglib2.0-dev libpixman-1-dev zlib1g-dev libslirp-dev \
             pkg-config meson aria2 ovmf
