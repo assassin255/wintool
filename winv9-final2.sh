@@ -586,125 +586,6 @@ command -v qemu-img >/dev/null 2>&1 || \
 # ════════════════════════════════════════════════════════════════
 #  MENU CHÍNH
 # ════════════════════════════════════════════════════════════════
-echo ""
-echo "════════════════════════════════════"
-echo "🖥️  WINDOWS VM MANAGER  [v9.3]"
-echo "════════════════════════════════════"
-echo "1️⃣  Tạo Windows VM"
-echo "2️⃣  Quản lý VM đang chạy"
-echo "════════════════════════════════════"
-read -rp "👉 [1-2]: " main_choice
-
-if [[ "$main_choice" == "2" ]]; then
-    echo ""
-    echo -e "\033[1;36m🚀 ===== RUNNING VMs =====\033[0m"
-    found=0
-    while IFS= read -r pid; do
-        [ -z "$pid" ] && continue
-        found=1
-        cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
-        vcpu=$(echo "$cmd" | grep -oP '(?<=-smp )\S+' | head -1 || echo "?")
-        ram=$(echo  "$cmd" | grep -oP '(?<=-m )\S+'   | head -1 || echo "?")
-        pcpu=$(ps -p "$pid" -o %cpu= 2>/dev/null | tr -d ' ' || echo "?")
-        pmem=$(ps -p "$pid" -o %mem= 2>/dev/null | tr -d ' ' || echo "?")
-        echo -e "🆔 PID:\033[1;33m${pid}\033[0m  vCPU:\033[1;34m${vcpu}\033[0m  RAM:\033[1;34m${ram}\033[0m  CPU%:\033[1;32m${pcpu}\033[0m  MEM%:\033[1;35m${pmem}\033[0m"
-    done < <(pgrep -f 'qemu-system-x86_64' 2>/dev/null || true)
-    [ "$found" -eq 0 ] && echo "❌ Không có VM nào đang chạy"
-    echo -e "\033[1;36m══════════════════════════════\033[0m"
-    read -rp "🆔 PID muốn tắt (Enter bỏ qua): " kill_pid
-    if [[ -n "$kill_pid" && "$kill_pid" =~ ^[0-9]+$ && -d "/proc/$kill_pid" ]]; then
-        kill "$kill_pid" 2>/dev/null && echo "✅ Đã tắt VM PID $kill_pid" || echo "⚠️  Không tắt được"
-    fi
-    exit 0
-fi
-
-# ════════════════════════════════════════════════════════════════
-#  CHỌN WINDOWS
-# ════════════════════════════════════════════════════════════════
-echo ""
-echo "🪟 Chọn phiên bản Windows:"
-echo "1️⃣  Windows Server 2012 R2 x64"
-echo "2️⃣  Windows Server 2022 x64"
-echo "3️⃣  Windows 11 LTSB x64"
-echo "4️⃣  Windows 10 LTSB 2015 x64"
-echo "5️⃣  Windows 10 LTSC 2023 x64"
-read -rp "👉 [1-5]: " win_choice
-
-case "$win_choice" in
-    1) WIN_NAME="Windows Server 2012 R2"
-       WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"
-       USE_UEFI="no"  NET_DEV="virtio" ;;
-    2) WIN_NAME="Windows Server 2022"
-       WIN_URL="https://archive.org/download/tamnguyen-2022/2022.img"
-       USE_UEFI="no"  NET_DEV="virtio" ;;
-    3) WIN_NAME="Windows 11 LTSB"
-       WIN_URL="https://archive.org/download/win_20260203/win.img"
-       USE_UEFI="yes" NET_DEV="virtio" ;;
-    4) WIN_NAME="Windows 10 LTSB 2015"
-       WIN_URL="https://archive.org/download/win_20260208/win.img"
-       USE_UEFI="no"  NET_DEV="e1000e" ;;
-    5) WIN_NAME="Windows 10 LTSC 2023"
-       WIN_URL="https://archive.org/download/win_20260215/win.img"
-       USE_UEFI="no"  NET_DEV="virtio" ;;
-    *) WIN_NAME="Windows Server 2012 R2"
-       WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"
-       USE_UEFI="no"  NET_DEV="virtio" ;;
-esac
-
-case "$win_choice" in
-    3|4|5) RDP_USER="Admin";         RDP_PASS="Tam255Z" ;;
-    *)     RDP_USER="administrator"; RDP_PASS="Tamnguyenyt@123" ;;
-esac
-
-if [[ ! -f win.img ]]; then
-    spin_start "Đang tải $WIN_NAME (aria2c)..."
-    aria2c -x16 -s16 --continue --file-allocation=none \
-        --console-log-level=error --summary-interval=0 \
-        "$WIN_URL" -o win.img \
-        || { spin_fail "Tải image thất bại"; die "Tải image thất bại"; }
-    spin_stop "Tải $WIN_NAME xong"
-else
-    echo "✅ win.img đã có — bỏ qua tải"
-fi
-
-read -rp "📦 Mở rộng đĩa thêm bao nhiêu GB (default 20)? " extra_gb
-extra_gb="${extra_gb:-20}"
-if [[ "$extra_gb" =~ ^[0-9]+$ ]] && [ "$extra_gb" -gt 0 ]; then
-    qemu-img resize win.img "+${extra_gb}G" >/dev/null
-    echo "✅ Mở rộng +${extra_gb}GB"
-fi
-
-# ════════════════════════════════════════════════════════════════
-#  CẤU HÌNH VM
-# ════════════════════════════════════════════════════════════════
-echo ""
-echo "════════════════════════════════════"
-echo "⚙  CHẾ ĐỘ CẤU HÌNH VM"
-echo "════════════════════════════════════"
-echo "1️⃣  Auto (khuyên dùng)"
-echo "2️⃣  Thủ công"
-echo "════════════════════════════════════"
-read -rp "👉 [1-2]: " cfg_mode
-
-if [[ "$cfg_mode" == "1" ]]; then
-    echo "🧠 Auto detect..."
-    detect_cpu; detect_ram
-    echo "🖥️  CPU: ${CPU_PHYS} physical | ${CPU_USABLE} usable"
-    echo "💾 RAM: total=${RAM_TOTAL_GB}GB | available=${RAM_AVAIL_GB}GB | auto=${RAM_AUTO_GB}GB"
-    cpu_core=$CPU_USABLE
-    ram_size=$RAM_AUTO_GB
-    echo "⚙  Auto: CPU=${cpu_core} | RAM=${ram_size}GB"
-else
-    read -rp "⚙  CPU cores (default 4): " cpu_core
-    cpu_core="${cpu_core:-4}"
-    [[ "$cpu_core" =~ ^[0-9]+$ ]] || cpu_core=4
-    [ "$cpu_core" -lt 1 ] && cpu_core=1
-    read -rp "💾 RAM GB (default 4): " ram_size
-    ram_size="${ram_size:-4}"
-    [[ "$ram_size" =~ ^[0-9]+$ ]] || ram_size=4
-    [ "$ram_size" -lt 1 ] && ram_size=1
-fi
-
 detect_hugepage
 
 TCG_TB_MB=$ram_size
@@ -737,31 +618,194 @@ fi
 #  KHỞI ĐỘNG VM
 # ════════════════════════════════════════════════════════════════
 echo ""
-echo "🚀 Khởi động VM..."
+echo "════════════════════════════════════"
+echo "🖥️  WINDOWS VM MANAGER  v8"
+echo "════════════════════════════════════"
+echo "1️⃣  Tạo Windows VM"
+echo "2️⃣  Quản Lý Windows VM"
+echo "════════════════════════════════════"
+read -rp "👉 Nhập lựa chọn [1-2]: " main_choice
 
-# BUG FIX 1: Kill VM cũ đang dùng win.img hoặc port 3389 trước khi launch mới
-#            Tránh lỗi "Failed to get write lock" và "Could not set up hostfwd"
-_old_pids=$(pgrep -f "qemu-system-x86_64.*win\.img" 2>/dev/null || true)
-if [[ -n "$_old_pids" ]]; then
-    echo "⚠️  Phát hiện VM cũ đang dùng win.img — đang tắt..."
-    echo "$_old_pids" | xargs -r kill 2>/dev/null || true
-    sleep 2
-    # Force kill nếu vẫn còn
-    echo "$_old_pids" | xargs -r kill -9 2>/dev/null || true
-    sleep 1
+case "$main_choice" in
+2)
+    echo ""
+    echo -e "\033[1;36m🚀 ===== MANAGE RUNNING VM ===== 🚀\033[0m"
+
+    if pgrep -f 'qemu-system-x86_64' >/dev/null; then
+        while IFS= read -r pid; do
+            [ -n "$pid" ] || continue
+            cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            vcpu=$(sed -n 's/.*-smp \([^ ,]*\).*/\1/p' <<< "$cmd")
+            ram=$(sed -n 's/.*-m \([^ ]*\).*/\1/p' <<< "$cmd")
+            cpu=$(ps -p "$pid" -o %cpu=)
+            mem=$(ps -p "$pid" -o %mem=)
+            echo -e "🆔 PID: \033[1;33m$pid\033[0m  |  🔢 vCPU: \033[1;34m${vcpu}\033[0m  |  📦 VM RAM: \033[1;34m${ram}\033[0m  |  🧠 CPU: \033[1;32m${cpu}%\033[0m  |  💾 Host RAM: \033[1;35m${mem}%\033[0m"
+        done < <(pgrep -f 'qemu-system-x86_64')
+    else
+        echo "❌ Không có VM nào đang chạy"
+    fi
+
+    echo -e "\033[1;36m==================================\033[0m"
+    read -rp "🆔 Nhập PID VM muốn tắt (hoặc Enter để bỏ qua): " kill_pid
+    if [[ -n "$kill_pid" && -d "/proc/$kill_pid" ]]; then
+        kill "$kill_pid" 2>/dev/null || true
+        echo "✅ Đã gửi tín hiệu tắt VM PID $kill_pid"
+    fi
+    exit 0
+    ;;
+esac
+
+# ════════════════════════════════════════════════════════════════
+#  CHỌN PHIÊN BẢN WINDOWS
+# ════════════════════════════════════════════════════════════════
+echo ""
+echo "🪟 Chọn phiên bản Windows muốn tải:"
+echo "1️⃣  Windows Server 2012 R2 x64"
+echo "2️⃣  Windows Server 2022 x64"
+echo "3️⃣  Windows 11 LTSB x64"
+echo "4️⃣  Windows 10 LTSB 2015 x64"
+echo "5️⃣  Windows 10 LTSC 2023 x64"
+read -rp "👉 Nhập số [1-5]: " win_choice
+
+case "$win_choice" in
+1) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no" ;;
+2) WIN_NAME="Windows Server 2022";    WIN_URL="https://archive.org/download/tamnguyen-2022/2022.img";   USE_UEFI="no" ;;
+3) WIN_NAME="Windows 11 LTSB";        WIN_URL="https://archive.org/download/win_20260203/win.img";       USE_UEFI="yes" ;;
+4) WIN_NAME="Windows 10 LTSB 2015";   WIN_URL="https://archive.org/download/win_20260208/win.img";       USE_UEFI="no" ;;
+5) WIN_NAME="Windows 10 LTSC 2023";   WIN_URL="https://archive.org/download/win_20260215/win.img";       USE_UEFI="no" ;;
+*) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no" ;;
+esac
+
+case "$win_choice" in
+3|4|5) RDP_USER="Admin";         RDP_PASS="Tam255Z" ;;
+*)     RDP_USER="administrator"; RDP_PASS="Tamnguyenyt@123" ;;
+esac
+
+echo "🪟 Đang tải $WIN_NAME..."
+if [[ ! -f win.img ]]; then
+    silent aria2c -x16 -s16 --continue --file-allocation=none "$WIN_URL" -o win.img
 fi
 
-QEMU_START_LOG=$(mktemp /tmp/qemu-start-XXXXXX.log)
+read -rp "📦 Mở rộng đĩa thêm bao nhiêu GB (default 20)? " extra_gb
+extra_gb="${extra_gb:-20}"
+silent qemu-img resize win.img "+${extra_gb}G"
+
+# ════════════════════════════════════════════════════════════════
+#  CHẾ ĐỘ CẤU HÌNH VM: AUTO hoặc MANUAL (từ v7)
+# ════════════════════════════════════════════════════════════════
+echo ""
+echo "════════════════════════════════════"
+echo "⚙  CHỌN CHẾ ĐỘ CẤU HÌNH VM"
+echo "════════════════════════════════════"
+echo "1️⃣  Auto cấu hình (khuyên dùng)"
+echo "2️⃣  Tự chọn thủ công"
+echo "════════════════════════════════════"
+read -rp "👉 Nhập lựa chọn [1-2]: " cfg_mode
+
+if [[ "$cfg_mode" == "1" ]]; then
+    echo ""
+    echo "🧠 AUTO DETECT HOST RESOURCE..."
+
+    # --- AUTO DETECT CPU ---
+    cpu_v=$(nproc 2>/dev/null)
+    cpu_u=$cpu_v
+
+    # Hỗ trợ cgroup v2 và v1
+    if [ -f /sys/fs/cgroup/cpu.max ]; then
+        IFS=" " read -r cq cp < /sys/fs/cgroup/cpu.max
+        if [ "$cq" != "max" ] 2>/dev/null; then
+            cpu_u=$(awk "BEGIN{printf \"%.0f\",$cq/$cp}")
+        fi
+    elif [ -f /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+        cq=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+        cp=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+        if [ "$cq" != "-1" ] 2>/dev/null; then
+            cpu_u=$(awk "BEGIN{printf \"%.0f\",$cq/$cp}")
+        fi
+    fi
+
+    [ "$cpu_u" -lt 1 ] && cpu_u=1
+
+    # --- AUTO DETECT RAM ---
+    mem_total_gb=$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
+    mem_auto_gb=$(awk "BEGIN{printf \"%d\", ($mem_total_gb*0.85)+0.5}")
+
+    echo "🖥️  CPU: thấy=${cpu_v} cores | usable=${cpu_u} cores"
+    echo "💾 RAM: total=${mem_total_gb}GB | auto=${mem_auto_gb}GB"
+
+    cpu_core=$cpu_u
+    ram_size=$mem_auto_gb
+
+    # Giới hạn an toàn
+    [ "$ram_size" -lt 2 ]                   && ram_size=2
+    [ "$cpu_core" -gt "$cpu_v" ]             && cpu_core=$cpu_v
+    max_ram=$((mem_total_gb - 1))
+    [ "$ram_size" -gt "$max_ram" ]           && ram_size=$max_ram
+
+    echo ""
+    echo "⚙  AUTO CONFIG:"
+    echo "   CPU cores : $cpu_core"
+    echo "   RAM       : ${ram_size} GB"
+else
+    echo ""
+    read -rp "⚙  CPU core (default 4): " cpu_core
+    cpu_core="${cpu_core:-4}"
+    read -rp "💾 RAM GB (default 4): " ram_size
+    ram_size="${ram_size:-4}"
+fi
+
+# --- AUTO DETECT HUGEPAGE (từ v7) ---
+detect_hugepage
+
+# --- AUTO TCG TB SIZE theo RAM VM (từ v7) ---
+TCG_TB_MB=$((ram_size))
+[ "$TCG_TB_MB" -lt 1 ] && TCG_TB_MB=1
+[ "$TCG_TB_MB" -gt 4 ] && TCG_TB_MB=4
+TCG_TB_BYTES=$((TCG_TB_MB * 1024 * 1024))
+echo "⚡ TCG TB cache: ${TCG_TB_MB}MB (auto theo ${ram_size}GB RAM VM)"
+
+# --- AUTO DETECT CPU FLAGS từ host (từ v7) ---
+cpu_host=$(grep -m1 "model name" /proc/cpuinfo | sed 's/^.*: //')
+cpu_host="${cpu_host//,/ }"
+
+CPU_EXTRA=""
+grep -q ssse3  /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+ssse3"
+grep -q sse4_1 /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+sse4.1"
+grep -q sse4_2 /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+sse4.2"
+grep -q rdtscp /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+rdtscp"
+grep -q ' avx ' /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+avx"
+grep -q avx2   /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+avx2"
+
+cpu_model="qemu64,hypervisor=off,tsc=on,invtsc=on,pmu=off,l3-cache=on,+cmov,+mmx,+fxsr,+sse2,+cx16,+x2apic,+sep,+pat,+pse,+aes,+popcnt${CPU_EXTRA},model-id=${cpu_host}"
+
+# --- Network device ---
+if [[ "$win_choice" == "4" ]]; then
+    NET_DEVICE="-device e1000e,netdev=n0"
+else
+    NET_DEVICE="-device virtio-net-pci,netdev=n0"
+fi
+
+# --- BIOS/UEFI ---
+if [[ "$USE_UEFI" == "yes" ]]; then
+    BIOS_OPT="-bios /usr/share/qemu/OVMF.fd"
+else
+    BIOS_OPT=""
+fi
+
+# ════════════════════════════════════════════════════════════════
+#  KHỞI ĐỘNG VM (cấu trúc v3 stable + hugepage opt từ v7)
+# ════════════════════════════════════════════════════════════════
+echo "🚀 Đang khởi tạo VM..."
 
 qemu-system-x86_64 \
     -machine q35,hpet=off \
-    -cpu "$CPU_MODEL" \
+    -cpu "$cpu_model" \
     -smp "$cpu_core" \
     -m "${ram_size}G" \
-    ${HUGEPAGE_OPT:+$HUGEPAGE_OPT} \
-    -accel tcg,thread=multi,tb-size=${TCG_TB_BYTES} \
+    $HUGEPAGE_OPT \
+    -accel tcg,thread=multi,tb-size=$TCG_TB_BYTES \
     -rtc base=localtime \
-    ${BIOS_OPT:+$BIOS_OPT} \
+    $BIOS_OPT \
     -drive file=win.img,if=virtio,cache=unsafe,aio=threads,format=raw \
     -netdev user,id=n0,hostfwd=tcp::3389-:3389 \
     $NET_DEVICE \
@@ -776,96 +820,44 @@ qemu-system-x86_64 \
     -display none \
     -vga virtio \
     -daemonize \
-    >"$QEMU_START_LOG" 2>&1
-QEMU_EXIT=$?
+    > /dev/null 2>&1 || true
 
-if [ "$QEMU_EXIT" -ne 0 ]; then
-    echo "❌ QEMU khởi động thất bại (exit $QEMU_EXIT):"
-    cat "$QEMU_START_LOG" >&2
-    rm -f "$QEMU_START_LOG"
-    exit 1
-fi
-rm -f "$QEMU_START_LOG"
-
-spin_start "Chờ VM khởi động..."
-sleep 5
-spin_stop "VM khởi động xong"
-
-# BUG FIX 2: kiểm tra VM thực sự đang chạy bằng cách tìm PID live,
-#            loại bỏ zombie (stat Z) — pgrep -f rộng quá bắt cả defunct
-_vm_pid=$(pgrep -f "qemu-system-x86_64.*win\.img" 2>/dev/null | while read -r p; do
-    [[ "$(cat /proc/$p/status 2>/dev/null | awk '/^State:/{print $2}')" != "Z" ]] && echo "$p"
-done | head -1)
-
-if [[ -n "$_vm_pid" ]]; then
-    echo "✅ VM đang chạy (PID: $_vm_pid)"
-else
-    echo "⚠️  VM chưa chạy — kiểm tra lại cấu hình"
-fi
+sleep 3
 
 # ════════════════════════════════════════════════════════════════
-#  TUNNEL RDP
+#  MỞ PORT TUNNEL RDP
 # ════════════════════════════════════════════════════════════════
-use_rdp=$(ask "🛰️  Mở tunnel RDP? (y/n): " "n")
+use_rdp=$(ask "🛰️  Tiếp tục mở port để kết nối đến VM? (y/n): " "n")
+echo "⌛ Đang tạo VM với cấu hình bạn đã nhập, vui lòng đợi..."
 
 if [[ "$use_rdp" == "y" ]]; then
-    spin_start "Cài tmux..."
-    priv apt-get install -y -qq tmux >/dev/null 2>&1 || true
-    spin_stop "tmux sẵn sàng"
-
-    if [[ ! -f ./kami-tunnel ]]; then
-        spin_start "Tải kami-tunnel..."
-        local_tag=$(curl -fsSL "https://api.github.com/repos/kami2k1/tunnel/releases/latest" \
-            2>/dev/null | grep '"tag_name"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        local_tag="${local_tag:-3.0.3}"
-        kami_url="https://github.com/kami2k1/tunnel/releases/download/${local_tag}/kami-tunnel-linux-amd64.tar.gz"
-        if command -v wget &>/dev/null; then
-            wget -q -O /tmp/kami.tar.gz "$kami_url" \
-                || { spin_fail "Tải kami-tunnel thất bại"; die "Không tải được kami-tunnel"; }
-        else
-            curl -fsSL -o /tmp/kami.tar.gz "$kami_url" \
-                || { spin_fail "Tải kami-tunnel thất bại"; die "Không tải được kami-tunnel"; }
-        fi
-        tar -xzf /tmp/kami.tar.gz -C . 2>/dev/null \
-            || tar -xzf /tmp/kami.tar.gz 2>/dev/null || true
-        chmod +x ./kami-tunnel 2>/dev/null || true
-        spin_stop "Tải kami-tunnel xong (v${local_tag})"
-    else
-        echo "✅ kami-tunnel đã có"
-    fi
+    silent wget https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
+    silent tar -xzf kami-tunnel-linux-amd64.tar.gz
+    silent chmod +x kami-tunnel
+    silent sudo apt install -y tmux
 
     tmux kill-session -t kami 2>/dev/null || true
-    tmux new-session -d -s kami "./kami-tunnel -target 127.0.0.1:3389"
+    tmux new-session -d -s kami "./kami-tunnel 3389"
+    sleep 4
 
-    spin_start "Chờ tunnel kết nối..."
-    PUBLIC=""
-    for _i in $(seq 1 25); do
-        sleep 1
-        PUBLIC=$(tmux capture-pane -p -t kami 2>/dev/null \
-            | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
-            | grep -i 'Public:' \
-            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' \
-            | head -1 || true)
-        [[ -n "$PUBLIC" ]] && break
-    done
-    spin_stop "Tunnel sẵn sàng"
-    [[ -z "$PUBLIC" ]] && PUBLIC="chưa lấy được — chạy: tmux attach -t kami"
+    PUBLIC=$(tmux capture-pane -pt kami -p | sed 's/\x1b\[[0-9;]*m//g' | grep -i 'public' | grep -oE '[a-zA-Z0-9\.\-]+:[0-9]+' | head -n1)
 
     echo ""
     echo "══════════════════════════════════════════════"
-    echo "🚀 WINDOWS VM DEPLOYED  [v9.3]"
+    echo "🚀 WINDOWS VM DEPLOYED SUCCESSFULLY  [v8]"
     echo "══════════════════════════════════════════════"
-    printf "🪟 OS           : %s\n"   "$WIN_NAME"
-    printf "⚙  CPU Cores    : %s\n"   "$cpu_core"
-    printf "💾 RAM          : %sGB\n" "$ram_size"
-    printf "🧠 CPU Host     : %s\n"   "$CPU_HOST_MODEL"
-    printf "⚡ TCG TB Cache  : %sMB\n" "$TCG_TB_MB"
-    printf "📄 HugePages    : %s\n"   "$HP_INFO"
+    echo "🪟 OS           : $WIN_NAME"
+    echo "⚙  CPU Cores    : $cpu_core"
+    echo "💾 RAM          : ${ram_size} GB"
+    echo "🧠 CPU Host     : $cpu_host"
+    echo "⚡ TCG TB Cache  : ${TCG_TB_MB}MB"
+    echo "📄 HugePages    : $HP_INFO"
     echo "──────────────────────────────────────────────"
-    printf "📡 RDP Address  : %s\n"   "$PUBLIC"
-    printf "👤 Username     : %s\n"   "$RDP_USER"
-    printf "🔑 Password     : %s\n"   "$RDP_PASS"
+    echo "📡 RDP Address  : $PUBLIC"
+    echo "👤 Username     : $RDP_USER"
+    echo "🔑 Password     : $RDP_PASS"
     echo "══════════════════════════════════════════════"
-    echo "🟢 Status       : RUNNING  |  Headless / RDP"
+    echo "🟢 Status       : RUNNING"
+    echo "⏱  GUI Mode     : Headless / RDP"
     echo "══════════════════════════════════════════════"
 fi
