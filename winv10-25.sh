@@ -661,10 +661,10 @@ esac
 # ════════════════════════════════════════════════════════════════
 echo ""
 echo "🪟 Chọn phiên bản Windows muốn tải:"
-echo "1️⃣  Windows Server 2012 R2 x64"
+echo "1️⃣  Windows Server 2012 R2 x64 (Khuyên Dùng)"
 echo "2️⃣  Windows Server 2022 x64"
 echo "3️⃣  Windows 11 LTSB x64"
-echo "4️⃣  Windows 10 LTSB 2015 x64"
+echo "4️⃣  Windows 10 LTSB 2015 x64 (Khuyên Dùng)"
 echo "5️⃣  Windows 10 LTSC 2023 x64"
 read -rp "👉 Nhập số [1-5]: " win_choice
 
