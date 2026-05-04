@@ -3,11 +3,9 @@ set -euo pipefail
 
 # ════════════════════════════════════════════════════════════════
 #  WINDOWS VM TOOL v14
-#  New: GPU Emulation (Host detect / Fake NVIDIA GPU)
-#  + LLVMpipe software 3D acceleration
-#  + Rootless build fallback từ source nếu không có conda
-#  + LLVM 16 via apt (không dùng external repo)
-#  Fix: build/compile 1 lần | spinner loading | glib/venv/qemu
+#  LLVM 16 via apt (không dùng external repo)
+#  Rootless build fallback từ source nếu không có conda
+#  Fix: build/compile 1 lần | spinner loading | glib/zlib/libffi
 # ════════════════════════════════════════════════════════════════
 
 # ── MÀU SẮC ────────────────────────────────────────────────────
@@ -66,111 +64,6 @@ ver_lt() {
 }
 
 # ════════════════════════════════════════════════════════════════
-#  GPU / MINECRAFT 3D MODULE
-#  - VirGL / LLVMpipe only
-#  - No NVIDIA spoofing, no host GPU detection
-#  - Minecraft preset tries virtio-gpu-gl-pci or virtio-vga-gl first,
-#    then falls back to virtio-vga
-# ════════════════════════════════════════════════════════════════
-
-# Biến global GPU
-GPU_ARGS=""           # QEMU args cho GPU device
-GPU_DISPLAY_ARGS=""   # QEMU display args
-GPU_NAME=""           # Tên GPU/3D mode hiển thị
-GPU_VGA_TYPE="virtio-vga"
-GPU_PROFILE="default"
-GPU_SMBIOS_GPU=""
-
-_enable_minecraft_profile() {
-    export GALLIUM_DRIVER=llvmpipe
-    export LIBGL_ALWAYS_SOFTWARE=1
-    export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
-    export MESA_GL_VERSION_OVERRIDE=4.5
-    export MESA_GLSL_VERSION_OVERRIDE=450
-    export LP_NUM_THREADS="$(nproc)"
-    export vblank_mode=0
-    echo -e "${Y}⚠ Minecraft profile: VirGL/LLVMpipe only, không có NVIDIA spoof${W}"
-}
-
-_build_virgl_gpu_args() {
-    local mode="${1:-minecraft}"
-    local qemu_bin="${QEMU_BIN:-qemu-system-x86_64}"
-    local has_virtio_gl=0
-    local has_virtio_gpu_gl=0
-    local has_egl_headless=0
-
-    if "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl'; then
-        has_virtio_gl=1
-    fi
-    if "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-gpu-gl-pci'; then
-        has_virtio_gpu_gl=1
-    fi
-    if "$qemu_bin" -display help 2>/dev/null | grep -q 'egl-headless'; then
-        has_egl_headless=1
-    fi
-
-    GPU_PROFILE="$mode"
-    GPU_SMBIOS_GPU=""
-
-    if [[ "$mode" == "minecraft" ]]; then
-        GPU_NAME="VirGL / LLVMpipe 3D"
-        _enable_minecraft_profile
-
-        if [[ "$has_virtio_gpu_gl" == "1" && "$has_egl_headless" == "1" ]]; then
-            GPU_VGA_TYPE="virtio-gpu-gl-pci"
-            GPU_DISPLAY_ARGS="-display egl-headless"
-            GPU_ARGS="-device virtio-gpu-gl-pci,max_outputs=1"
-            echo -e "${G}✔ Minecraft mode: virtio-gpu-gl-pci + EGL headless${W}"
-        elif [[ "$has_virtio_gl" == "1" && "$has_egl_headless" == "1" ]]; then
-            GPU_VGA_TYPE="virtio-vga-gl"
-            GPU_DISPLAY_ARGS="-display egl-headless"
-            GPU_ARGS="-device virtio-vga-gl,max_outputs=1"
-            echo -e "${G}✔ Minecraft mode: virtio-vga-gl + EGL headless${W}"
-        elif [[ "$has_virtio_gpu_gl" == "1" ]]; then
-            GPU_VGA_TYPE="virtio-gpu-gl-pci"
-            GPU_DISPLAY_ARGS="-display none"
-            GPU_ARGS="-device virtio-gpu-gl-pci,max_outputs=1"
-            echo -e "${Y}⚠ Minecraft mode: không có egl-headless, dùng virtio-gpu-gl-pci fallback${W}"
-        else
-            GPU_VGA_TYPE="virtio-vga"
-            GPU_DISPLAY_ARGS="-display none"
-            GPU_ARGS="-device virtio-vga,max_outputs=1"
-            echo -e "${Y}⚠ Minecraft mode: không có virtio-gl, fallback sang virtio-vga${W}"
-        fi
-    else
-        GPU_NAME="Default VirtIO VGA"
-        GPU_VGA_TYPE="virtio-vga"
-        GPU_DISPLAY_ARGS="-display none"
-        GPU_ARGS="-device virtio-vga,max_outputs=1"
-        echo -e "${B}ℹ Dùng VGA mặc định (virtio-vga)${W}"
-    fi
-}
-
-# ── Menu chính GPU ───────────────────────────────────────────
-_gpu_emulation_menu() {
-    local is_rootless="${1:-0}"
-
-    echo ""
-    echo -e "${C}════════════════════════════════════════════════${W}"
-    echo -e "${C}🎮 GPU MODE${W}"
-    echo -e "${C}════════════════════════════════════════════════${W}"
-    echo -e "1️⃣  Minecraft 3D profile (VirGL / LLVMpipe)"
-    echo -e "2️⃣  Không dùng GPU emulation (virtio-vga)"
-    echo -e "${C}════════════════════════════════════════════════${W}"
-    read -rp "👉 Chọn chế độ GPU [1-2]: " gpu_choice
-
-    case "${gpu_choice:-1}" in
-        1)
-            _build_virgl_gpu_args "minecraft"
-            ;;
-        2|*)
-            _build_virgl_gpu_args "default"
-            ;;
-    esac
-}
-
-
-# ════════════════════════════════════════════════════════════════
 #  PACKAGE MANAGER — root → sudo apt → rootless build từ source
 # ════════════════════════════════════════════════════════════════
 
@@ -213,25 +106,6 @@ apt_install() {
 #  BUILD LIBRARIES FROM SOURCE (khi không có conda)
 # ════════════════════════════════════════════════════════════════
 
-_build_pixman_from_source() {
-    local prefix="$1"
-    local build_dir="$2"
-    
-    spin_start "Build pixman từ source..."
-    cd "$build_dir"
-    wget -c -q https://cairographics.org/releases/pixman-0.42.2.tar.gz
-    tar xzf pixman-0.42.2.tar.gz
-    cd pixman-0.42.2
-    
-    ./configure --prefix="$prefix" \
-        --disable-gtk \
-        --enable-shared \
-        > /dev/null 2>&1
-    make -j"$(nproc)" > /dev/null 2>&1
-    make install > /dev/null 2>&1
-    spin_stop "pixman 0.42.2 đã build xong"
-}
-
 _build_zlib_from_source() {
     local prefix="$1"
     local build_dir="$2"
@@ -262,6 +136,25 @@ _build_libffi_from_source() {
     make -j"$(nproc)" > /dev/null 2>&1
     make install > /dev/null 2>&1
     spin_stop "libffi 3.4.6 đã build xong"
+}
+
+_build_pixman_from_source() {
+    local prefix="$1"
+    local build_dir="$2"
+    
+    spin_start "Build pixman từ source..."
+    cd "$build_dir"
+    wget -c -q https://cairographics.org/releases/pixman-0.42.2.tar.gz
+    tar xzf pixman-0.42.2.tar.gz
+    cd pixman-0.42.2
+    
+    ./configure --prefix="$prefix" \
+        --disable-gtk \
+        --enable-shared \
+        > /dev/null 2>&1
+    make -j"$(nproc)" > /dev/null 2>&1
+    make install > /dev/null 2>&1
+    spin_stop "pixman 0.42.2 đã build xong"
 }
 
 _build_glib_from_source() {
@@ -532,13 +425,6 @@ _rootless_build() {
     cd "$BUILD/qemu-11.0.0"
     rm -rf build   # xóa build dir cũ nếu có
 
-    # ── Rootless: thêm --enable-opengl nếu có virglrenderer ──
-    local GL_OPT="--disable-opengl"
-    if pkg-config --exists virglrenderer 2>/dev/null; then
-        GL_OPT="--enable-opengl --enable-virglrenderer"
-        echo -e "${G}✔${W} virglrenderer found — enable OpenGL/virgl for GPU emulation"
-    fi
-
     ./configure \
         --prefix="$PREFIX" \
         --python="$(command -v python3)" \
@@ -548,7 +434,8 @@ _rootless_build() {
         --disable-werror \
         --disable-gtk \
         --disable-sdl \
-        $GL_OPT \
+        --disable-opengl \
+        --disable-virglrenderer \
         --enable-slirp \
         --enable-vnc \
         --disable-libusb \
@@ -662,12 +549,6 @@ if [[ "$choice" == "y" ]]; then
             "meson|meson|meson"
             "software-properties-common|software-properties-common|"
             "genisoimage|genisoimage|genisoimage"
-            "libvirglrenderer-dev|libvirglrenderer-dev|"
-            "libegl1-mesa-dev|libegl1-mesa-dev|"
-            "libgbm-dev|libgbm-dev|"
-            "libepoxy-dev|libepoxy-dev|"
-            "mesa-utils|mesa-utils|glxinfo"
-            "pciutils|pciutils|lspci"
         )
 
         TOTAL=${#DEPS[@]}
@@ -832,18 +713,6 @@ if [[ "$choice" == "y" ]]; then
 -DCONFIG_TCG_INTERPRETER=0"
         LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3 -Wl,--thinlto-cache-dir=/tmp/lto-cache"
 
-        # ── Detect virglrenderer cho OpenGL/3D support ──────────
-        GL_OPTS="--disable-opengl"
-        if pkg-config --exists virglrenderer 2>/dev/null; then
-            GL_OPTS="--enable-opengl --enable-virglrenderer"
-            echo -e "${G}✔ virglrenderer found — enabling OpenGL for GPU emulation${W}"
-        elif pkg-config --exists epoxy 2>/dev/null; then
-            GL_OPTS="--enable-opengl"
-            echo -e "${G}✔ libepoxy found — enabling basic OpenGL${W}"
-        else
-            echo -e "${Y}⚠ No OpenGL support — GPU emulation will use software rendering${W}"
-        fi
-
         spin_start "Configure QEMU..."
         ../qemu-src/configure \
             --prefix=/opt/qemu-optimized \
@@ -853,7 +722,8 @@ if [[ "$choice" == "y" ]]; then
             --enable-lto \
             --enable-coroutine-pool \
             --enable-vnc \
-            $GL_OPTS \
+            --disable-opengl \
+            --disable-virglrenderer \
             --disable-kvm \
             --disable-mshv \
             --disable-xen \
@@ -1086,42 +956,10 @@ cpu_model="qemu64,hypervisor=off,tsc=on,pmu=off,l3-cache=on,+cmov,+mmx,+fxsr,+ss
     || BIOS_OPT=""
 
 # ════════════════════════════════════════════════════════════════
-#  GPU EMULATION — Hỏi người dùng trước khi khởi VM
-# ════════════════════════════════════════════════════════════════
-_gpu_emulation_menu "$ROOTLESS"
-
-# ════════════════════════════════════════════════════════════════
 #  KHỞI ĐỘNG VM
 # ════════════════════════════════════════════════════════════════
 
-# ── Xây dựng QEMU command line ────────────────────────────────
-# Nếu GPU emulation được chọn, dùng GPU_ARGS thay cho -vga virtio
-if [[ -n "$GPU_ARGS" ]]; then
-    # GPU emulation mode: dùng -device thay -vga
-    VGA_OPT=""      # không dùng -vga legacy
-    DISPLAY_OPT="$GPU_DISPLAY_ARGS"
-    GPU_EXTRA="$GPU_ARGS"
-    SMBIOS_GPU_OPT="$GPU_SMBIOS_GPU"
-else
-    # Default: dùng virtio VGA
-    VGA_OPT="-vga virtio"
-    DISPLAY_OPT="-display none"
-    GPU_EXTRA=""
-    SMBIOS_GPU_OPT=""
-fi
-
-# ── Set LLVMpipe environment cho QEMU host process ───────────
-# Nếu GPU emulation + virgl, force LLVMpipe làm software 3D backend
-if [[ -n "$GPU_ARGS" ]]; then
-    export GALLIUM_DRIVER=llvmpipe
-    export LP_NUM_THREADS=$(nproc)
-    export MESA_GL_VERSION_OVERRIDE=4.5
-    export MESA_GLSL_VERSION_OVERRIDE=450
-    export LIBGL_ALWAYS_SOFTWARE=1
-    echo -e "${B}ℹ LLVMpipe environment set (GALLIUM_DRIVER=llvmpipe, GL 4.5)${W}"
-fi
-
-spin_start "Khởi động VM ${WIN_NAME} ${GPU_NAME:+(GPU: $GPU_NAME)}..."
+spin_start "Khởi động VM ${WIN_NAME}..."
 
 # Build command array
 QEMU_CMD=(
@@ -1155,31 +993,16 @@ QEMU_CMD+=(
 )
 
 # Display & VGA
-# Khi dùng -nodefaults, phải thêm lại các device cơ bản
 QEMU_CMD+=(-nodefaults)
-# Thêm lại serial/monitor để debug nếu cần
 QEMU_CMD+=(-serial none -monitor none)
-
-if [[ -n "$GPU_EXTRA" ]]; then
-    # GPU emulation: dùng GPU_EXTRA (có thể là -vga std hoặc -device ...)
-    QEMU_CMD+=($GPU_EXTRA)
-    QEMU_CMD+=($DISPLAY_OPT)
-else
-    QEMU_CMD+=($DISPLAY_OPT)
-fi
+QEMU_CMD+=(-vga virtio)
+QEMU_CMD+=(-display none)
 
 # SMBIOS
 QEMU_CMD+=(
     -global ICH9-LPC.disable_s3=1
     -global ICH9-LPC.disable_s4=1
     -smbios type=1,manufacturer="Dell Inc.",product="PowerEdge R640"
-)
-[[ -n "$SMBIOS_GPU_OPT" ]] && QEMU_CMD+=("$SMBIOS_GPU_OPT")
-
-# Misc — KHÔNG dùng kvm-pit khi chạy TCG (không có KVM)
-# KHÔNG dùng -daemonize vì conflict với -display none trên một số QEMU build
-# Thay bằng nohup background
-QEMU_CMD+=(
     -no-user-config
 )
 
@@ -1242,14 +1065,6 @@ if [[ "$use_rdp" == "y" ]]; then
     echo -e "💾 RAM          : ${B}${ram_size} GB${W}"
     echo -e "🧠 CPU Host     : $cpu_host"
     echo -e "⚡ TCG TB Cache  : ${TCG_TB_MB}MB"
-    if [[ -n "$GPU_NAME" && "$GPU_NAME" != "Default VirtIO VGA" ]]; then
-        echo -e "🎮 GPU Emulated : ${G}${GPU_NAME}${W}"
-        if [[ "$GPU_PROFILE" == "minecraft" ]]; then
-            echo -e "   Mode        : ${B}Minecraft 3D profile${W}"
-        else
-            echo -e "   GPU Backend  : ${B}LLVMpipe Software 3D${W}"
-        fi
-    fi
     echo -e "${C}──────────────────────────────────────────────${W}"
     echo -e "📡 RDP Address  : ${G}${PUBLIC:-<chờ tunnel>}${W}"
     echo -e "👤 Username     : ${Y}$RDP_USER${W}"
@@ -1257,13 +1072,5 @@ if [[ "$use_rdp" == "y" ]]; then
     echo -e "${C}══════════════════════════════════════════════${W}"
     echo -e "${G}🟢 Status       : RUNNING${W}"
     echo "⏱  GUI Mode     : Headless / RDP"
-    if [[ -n "$GPU_NAME" && "$GPU_NAME" != "Default VirtIO VGA" ]]; then
-        echo ""
-        echo -e "${Y}📋 GPU SETUP (chạy trong VM):${W}"
-        echo -e "   1. Mở File Explorer → CD drive 'GPU_SETUP'"
-        echo -e "   2. Chạy ${B}gpu-setup.bat${W} với quyền Administrator"
-        echo -e "   3. Restart VM để Task Manager hiển thị GPU"
-        echo -e "   4. Nếu mục tiêu là Minecraft, cài thêm driver OpenGL/3D của Windows guest phù hợp${W}"
-    fi
     echo -e "${C}══════════════════════════════════════════════${W}"
 fi
