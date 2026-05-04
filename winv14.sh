@@ -1,0 +1,1269 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ════════════════════════════════════════════════════════════════
+#  WINDOWS VM TOOL v14
+#  New: GPU Emulation (Host detect / Fake NVIDIA GPU)
+#  + LLVMpipe software 3D acceleration
+#  + Rootless build fallback từ source nếu không có conda
+#  + LLVM 16 via apt (không dùng external repo)
+#  Fix: build/compile 1 lần | spinner loading | glib/venv/qemu
+# ════════════════════════════════════════════════════════════════
+
+# ── MÀU SẮC ────────────────────────────────────────────────────
+R='\033[1;31m'; G='\033[1;32m'; Y='\033[1;33m'
+B='\033[1;34m'; C='\033[1;36m'; W='\033[0m'
+
+# ── SPINNER ─────────────────────────────────────────────────────
+_SPIN_PID=""
+
+spin_start() {
+    local msg="${1:-Processing...}"
+    local frames=('◜' '◝' '◞' '◟')
+    (
+        while :; do
+            for f in "${frames[@]}"; do
+                printf "\r${B}%s${W} %s" "$f" "$msg"
+                sleep 0.1
+            done
+        done
+    ) &
+    _SPIN_PID=$!
+    disown "$_SPIN_PID"
+}
+
+spin_stop() {
+    local msg="${1:-Done}"
+    if [[ -n "$_SPIN_PID" ]] && kill -0 "$_SPIN_PID" 2>/dev/null; then
+        kill "$_SPIN_PID" 2>/dev/null
+        wait "$_SPIN_PID" 2>/dev/null || true
+    fi
+    _SPIN_PID=""
+    printf "\r${G}✔${W} %s\n" "$msg"
+}
+
+spin_fail() {
+    local msg="${1:-Failed}"
+    if [[ -n "$_SPIN_PID" ]] && kill -0 "$_SPIN_PID" 2>/dev/null; then
+        kill "$_SPIN_PID" 2>/dev/null
+        wait "$_SPIN_PID" 2>/dev/null || true
+    fi
+    _SPIN_PID=""
+    printf "\r${R}✘${W} %s\n" "$msg"
+}
+
+# ── HÀM HỖ TRỢ ─────────────────────────────────────────────────
+silent() { "$@" > /dev/null 2>&1; }
+
+ask() {
+    read -rp "$1" ans
+    ans="${ans,,}"
+    echo "${ans:-$2}"
+}
+
+ver_lt() {
+    [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" != "$2" ]
+}
+
+# ════════════════════════════════════════════════════════════════
+#  GPU / MINECRAFT 3D MODULE
+#  - VirGL / LLVMpipe only
+#  - No NVIDIA spoofing, no host GPU detection
+#  - Minecraft preset tries virtio-gpu-gl-pci or virtio-vga-gl first,
+#    then falls back to virtio-vga
+# ════════════════════════════════════════════════════════════════
+
+# Biến global GPU
+GPU_ARGS=""           # QEMU args cho GPU device
+GPU_DISPLAY_ARGS=""   # QEMU display args
+GPU_NAME=""           # Tên GPU/3D mode hiển thị
+GPU_VGA_TYPE="virtio-vga"
+GPU_PROFILE="default"
+GPU_SMBIOS_GPU=""
+
+_enable_minecraft_profile() {
+    export GALLIUM_DRIVER=llvmpipe
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+    export MESA_GL_VERSION_OVERRIDE=4.5
+    export MESA_GLSL_VERSION_OVERRIDE=450
+    export LP_NUM_THREADS="$(nproc)"
+    export vblank_mode=0
+    echo -e "${Y}⚠ Minecraft profile: VirGL/LLVMpipe only, không có NVIDIA spoof${W}"
+}
+
+_build_virgl_gpu_args() {
+    local mode="${1:-minecraft}"
+    local qemu_bin="${QEMU_BIN:-qemu-system-x86_64}"
+    local has_virtio_gl=0
+    local has_virtio_gpu_gl=0
+    local has_egl_headless=0
+
+    if "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl'; then
+        has_virtio_gl=1
+    fi
+    if "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-gpu-gl-pci'; then
+        has_virtio_gpu_gl=1
+    fi
+    if "$qemu_bin" -display help 2>/dev/null | grep -q 'egl-headless'; then
+        has_egl_headless=1
+    fi
+
+    GPU_PROFILE="$mode"
+    GPU_SMBIOS_GPU=""
+
+    if [[ "$mode" == "minecraft" ]]; then
+        GPU_NAME="VirGL / LLVMpipe 3D"
+        _enable_minecraft_profile
+
+        if [[ "$has_virtio_gpu_gl" == "1" && "$has_egl_headless" == "1" ]]; then
+            GPU_VGA_TYPE="virtio-gpu-gl-pci"
+            GPU_DISPLAY_ARGS="-display egl-headless"
+            GPU_ARGS="-device virtio-gpu-gl-pci,max_outputs=1"
+            echo -e "${G}✔ Minecraft mode: virtio-gpu-gl-pci + EGL headless${W}"
+        elif [[ "$has_virtio_gl" == "1" && "$has_egl_headless" == "1" ]]; then
+            GPU_VGA_TYPE="virtio-vga-gl"
+            GPU_DISPLAY_ARGS="-display egl-headless"
+            GPU_ARGS="-device virtio-vga-gl,max_outputs=1"
+            echo -e "${G}✔ Minecraft mode: virtio-vga-gl + EGL headless${W}"
+        elif [[ "$has_virtio_gpu_gl" == "1" ]]; then
+            GPU_VGA_TYPE="virtio-gpu-gl-pci"
+            GPU_DISPLAY_ARGS="-display none"
+            GPU_ARGS="-device virtio-gpu-gl-pci,max_outputs=1"
+            echo -e "${Y}⚠ Minecraft mode: không có egl-headless, dùng virtio-gpu-gl-pci fallback${W}"
+        else
+            GPU_VGA_TYPE="virtio-vga"
+            GPU_DISPLAY_ARGS="-display none"
+            GPU_ARGS="-device virtio-vga,max_outputs=1"
+            echo -e "${Y}⚠ Minecraft mode: không có virtio-gl, fallback sang virtio-vga${W}"
+        fi
+    else
+        GPU_NAME="Default VirtIO VGA"
+        GPU_VGA_TYPE="virtio-vga"
+        GPU_DISPLAY_ARGS="-display none"
+        GPU_ARGS="-device virtio-vga,max_outputs=1"
+        echo -e "${B}ℹ Dùng VGA mặc định (virtio-vga)${W}"
+    fi
+}
+
+# ── Menu chính GPU ───────────────────────────────────────────
+_gpu_emulation_menu() {
+    local is_rootless="${1:-0}"
+
+    echo ""
+    echo -e "${C}════════════════════════════════════════════════${W}"
+    echo -e "${C}🎮 GPU MODE${W}"
+    echo -e "${C}════════════════════════════════════════════════${W}"
+    echo -e "1️⃣  Minecraft 3D profile (VirGL / LLVMpipe)"
+    echo -e "2️⃣  Không dùng GPU emulation (virtio-vga)"
+    echo -e "${C}════════════════════════════════════════════════${W}"
+    read -rp "👉 Chọn chế độ GPU [1-2]: " gpu_choice
+
+    case "${gpu_choice:-1}" in
+        1)
+            _build_virgl_gpu_args "minecraft"
+            ;;
+        2|*)
+            _build_virgl_gpu_args "default"
+            ;;
+    esac
+}
+
+
+# ════════════════════════════════════════════════════════════════
+#  PACKAGE MANAGER — root → sudo apt → rootless build từ source
+# ════════════════════════════════════════════════════════════════
+
+APT_CMD=""        # lệnh apt cuối cùng dùng được
+APT_OK=0          # 1 = apt khả dụng
+ROOTLESS=0        # 1 = phải build rootless
+
+_detect_apt() {
+    echo -ne "${B}◜${W} Kiểm tra quyền package manager..."
+
+    # Tầng 1: root trực tiếp
+    if [[ "$(id -u)" == "0" ]] && apt-get update -qq > /dev/null 2>&1; then
+        APT_CMD="apt-get"
+        APT_OK=1
+        echo -e "\r${G}✔${W} Dùng apt-get (root)              "
+        return
+    fi
+
+    # Tầng 2: sudo apt
+    if sudo -n true 2>/dev/null && sudo apt-get update -qq > /dev/null 2>&1; then
+        APT_CMD="sudo apt-get"
+        APT_OK=1
+        echo -e "\r${G}✔${W} Dùng sudo apt-get                "
+        return
+    fi
+
+    # Tầng 3: cả 2 thất bại → rootless mode
+    echo -e "\r${Y}⚠${W}  Không có apt — chuyển sang build rootless từ source"
+    APT_OK=0
+    ROOTLESS=1
+}
+
+# ── Cài 1 package qua apt (dùng APT_CMD đã detect) ───────────
+apt_install() {
+    local pkg="$1"
+    $APT_CMD install -y -qq "$pkg" > /dev/null 2>&1
+}
+
+# ════════════════════════════════════════════════════════════════
+#  BUILD LIBRARIES FROM SOURCE (khi không có conda)
+# ════════════════════════════════════════════════════════════════
+
+_build_pixman_from_source() {
+    local prefix="$1"
+    local build_dir="$2"
+    
+    spin_start "Build pixman từ source..."
+    cd "$build_dir"
+    wget -c -q https://cairographics.org/releases/pixman-0.42.2.tar.gz
+    tar xzf pixman-0.42.2.tar.gz
+    cd pixman-0.42.2
+    
+    ./configure --prefix="$prefix" \
+        --disable-gtk \
+        --enable-shared \
+        > /dev/null 2>&1
+    make -j"$(nproc)" > /dev/null 2>&1
+    make install > /dev/null 2>&1
+    spin_stop "pixman 0.42.2 đã build xong"
+}
+
+_build_zlib_from_source() {
+    local prefix="$1"
+    local build_dir="$2"
+    
+    spin_start "Build zlib từ source..."
+    cd "$build_dir"
+    wget -c -q https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz
+    tar xzf v1.3.1.tar.gz
+    cd zlib-1.3.1
+    
+    ./configure --prefix="$prefix" --shared > /dev/null 2>&1
+    make -j"$(nproc)" > /dev/null 2>&1
+    make install > /dev/null 2>&1
+    spin_stop "zlib 1.3.1 đã build xong"
+}
+
+_build_libffi_from_source() {
+    local prefix="$1"
+    local build_dir="$2"
+    
+    spin_start "Build libffi từ source..."
+    cd "$build_dir"
+    wget -c -q https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+    tar xzf libffi-3.4.6.tar.gz
+    cd libffi-3.4.6
+    
+    ./configure --prefix="$prefix" > /dev/null 2>&1
+    make -j"$(nproc)" > /dev/null 2>&1
+    make install > /dev/null 2>&1
+    spin_stop "libffi 3.4.6 đã build xong"
+}
+
+_build_glib_from_source() {
+    local prefix="$1"
+    local build_dir="$2"
+    local py_prefix="$3"
+    
+    spin_start "Build glib từ source (mất 5-10 phút)..."
+    cd "$build_dir"
+    wget -c -q https://download.gnome.org/sources/glib/2.76/glib-2.76.6.tar.xz
+    tar xJf glib-2.76.6.tar.xz
+    cd glib-2.76.6
+    
+    mkdir -p build
+    cd build
+    
+    # Dùng meson từ python venv hoặc system
+    local meson_cmd="meson"
+    if [[ -x "$py_prefix/bin/meson" ]]; then
+        meson_cmd="$py_prefix/bin/meson"
+    fi
+    
+    PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/lib64/pkgconfig:${PKG_CONFIG_PATH:-}" \
+    $meson_cmd setup . .. \
+        --prefix="$prefix" \
+        -Dlibdir="lib" \
+        > /dev/null 2>&1
+    
+    ninja -j"$(nproc)" > /dev/null 2>&1
+    ninja install > /dev/null 2>&1
+    spin_stop "glib 2.76.6 đã build xong"
+}
+
+# ════════════════════════════════════════════════════════════════
+#  ROOTLESS BUILD — python + deps + qemu từ source không cần root
+# ════════════════════════════════════════════════════════════════
+_rootless_build() {
+    local ROOTLESS_QEMU="$HOME/qemu-static/bin/qemu-system-x86_64"
+
+    # ── Detect QEMU rootless đã có chưa ──────────────────────────
+    if [[ -x "$ROOTLESS_QEMU" ]]; then
+        local rv
+        rv=$("$ROOTLESS_QEMU" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+        echo -e "${G}⚡ QEMU rootless v${rv} đã tồn tại — bỏ qua build${W}"
+        export QEMU_BIN="$ROOTLESS_QEMU"
+        export PREFIX="$HOME/qemu-static"
+        export PY_PREFIX="${CONDA_PREFIX:-$HOME/python-local}"
+        export PATH="$PREFIX/bin:$PY_PREFIX/bin:$PATH"
+        export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib64:$PY_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${C}════════════════════════════════════${W}"
+    echo -e "${C}🔧 ROOTLESS BUILD MODE${W}"
+    echo -e "${C}════════════════════════════════════${W}"
+
+    # Dọn build cũ
+    rm -rf "$HOME/python-local" "$HOME/qemu-static" "$HOME/qemu-build" "$HOME/certs"
+
+    export PREFIX="$HOME/qemu-static"
+    export BUILD="$HOME/qemu-build"
+    mkdir -p "$PREFIX" "$BUILD" "$HOME/certs"
+
+    # ── SSL certs ────────────────────────────────────────────────
+    spin_start "Tải SSL certs..."
+    cd "$HOME/certs"
+    wget -q https://curl.se/ca/cacert.pem
+    export SSL_CERT_FILE="$HOME/certs/cacert.pem"
+    export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
+    spin_stop "SSL certs xong"
+
+    # ── Detect Python & conda ────────────────────────────────────
+    HAVE_CONDA=0
+    if command -v conda &>/dev/null; then
+        HAVE_CONDA=1
+        export PY_PREFIX="${CONDA_PREFIX:-/opt/conda}"
+        export PATH="$PY_PREFIX/bin:$HOME/.local/bin:$PREFIX/bin:$PATH"
+        echo -e "${G}✔${W} Phát hiện conda tại: $CONDA_PREFIX"
+    else
+        echo -e "${Y}⚠${W}  Không phát hiện conda — sẽ build từ source"
+        export PY_PREFIX="$HOME/python-local"
+        mkdir -p "$PY_PREFIX"
+        export PATH="$HOME/.local/bin:$PREFIX/bin:$PATH"
+    fi
+
+    # ── Python ──────────────────────────────────────────────────
+    if [[ $HAVE_CONDA -eq 0 ]]; then
+        echo -ne "${B}◜${W} Kiểm tra Python system..."
+        PY_VER_SYSTEM=$(python3 --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        
+        if [[ -n "$PY_VER_SYSTEM" ]]; then
+            echo -e "\r${G}✔${W} Python system $PY_VER_SYSTEM          "
+        else
+            echo -e "\r${R}✘${W} Không tìm thấy Python 3"
+            exit 1
+        fi
+    else
+        echo -ne "${B}◜${W} Kiểm tra Python conda..."
+        PY_VER_CONDA=$($PY_PREFIX/bin/python3 --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        echo -e "\r${G}✔${W} Python conda $PY_VER_CONDA          "
+    fi
+
+    # ── Verify SSL ───────────────────────────────────────────────
+    if python3 -c "import ssl; print('SSL OK:', ssl.OPENSSL_VERSION)" 2>/dev/null; then
+        echo -e "${G}✔${W} Python ssl module OK"
+    else
+        echo -e "${R}✘${W} Python ssl module KHÔNG có"
+        exit 1
+    fi
+
+    # ── Meson, ninja, pkg-config ────────────────────────────────
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        echo -ne "${B}◜${W} Cài meson/ninja từ conda..."
+        conda install -y -q -c conda-forge \
+            meson ninja pkg-config \
+            > /tmp/conda-meson.log 2>&1
+        echo -e "\r${G}✔${W} meson/ninja/pkg-config xong          "
+    else
+        echo -ne "${B}◜${W} Cài pip packages..."
+        python3 -m pip install --user -q --upgrade pip meson ninja > /tmp/pip-meson.log 2>&1
+        echo -e "\r${G}✔${W} meson/ninja từ pip xong          "
+    fi
+
+    # ── Build libs từ source nếu không có conda ──────────────────
+    if [[ $HAVE_CONDA -eq 0 ]]; then
+        echo ""
+        echo -e "${C}════════════════════════════════════${W}"
+        echo -e "${C}🔨 BUILD LIBRARIES FROM SOURCE${W}"
+        echo -e "${C}════════════════════════════════════${W}"
+        
+        _build_zlib_from_source "$PREFIX" "$BUILD"
+        _build_libffi_from_source "$PREFIX" "$BUILD"
+        _build_pixman_from_source "$PREFIX" "$BUILD"
+        
+        # Dùng meson từ pip nếu cần build glib
+        _build_glib_from_source "$PREFIX" "$BUILD" "$PY_PREFIX"
+    else
+        # Cài từ conda nếu có
+        echo -ne "${B}◜${W} Cài deps từ conda..."
+        conda install -y -q -c conda-forge \
+            glib pixman zlib libffi \
+            > /tmp/conda-deps.log 2>&1
+        echo -e "\r${G}✔${W} glib/pixman/zlib/libffi xong          "
+    fi
+
+    # ── Tìm pixman include ──────────────────────────────────────
+    PIXMAN_INC=""
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        # Tìm từ conda
+        for d in \
+            "$CONDA_PREFIX/include/pixman-1" \
+            "$CONDA_PREFIX/include" \
+            "/opt/conda/include/pixman-1" \
+            "/opt/conda/include"; do
+            if [[ -f "$d/pixman.h" ]]; then
+                PIXMAN_INC="$d"
+                break
+            fi
+        done
+    else
+        # Từ build source
+        PIXMAN_INC="$PREFIX/include"
+    fi
+    
+    if [[ -z "$PIXMAN_INC" ]]; then
+        PIXMAN_INC=$(find "$PREFIX" -name "pixman.h" -type f 2>/dev/null | head -1 | xargs dirname)
+    fi
+    echo -e "${G}✔${W} pixman.h tại: ${PIXMAN_INC}"
+
+    echo -ne "${B}◜${W} Cài pip packages..."
+    python3 -m pip install --user -q --upgrade pip packaging truststore \
+        > /tmp/pip-rootless.log 2>&1
+    echo -e "\r${G}✔${W} pip packages xong          "
+
+    # ── QEMU 11.0.0 ──────────────────────────────────────────
+    echo -ne "${B}◜${W} Tải QEMU 11.0.0..."
+    cd "$BUILD"
+    wget -c -qO- https://download.qemu.org/qemu-11.0.0.tar.xz | tar xJ > /dev/null 2>&1
+    echo -e "\r${G}✔${W} Tải QEMU xong          "
+
+    # ── libslirp — conda → tarball → git ─────────────────────────
+    echo -ne "${B}◜${W} Cài libslirp..."
+    SLIRP_OK=0
+
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        # Thử conda trước
+        if conda install -y -q -c conda-forge libslirp > /tmp/slirp-conda.log 2>&1; then
+            SLIRP_PC=$(find "$CONDA_PREFIX" -name "slirp.pc" 2>/dev/null | head -1)
+            if [[ -n "$SLIRP_PC" ]]; then
+                export PKG_CONFIG_PATH="$(dirname "$SLIRP_PC"):${PKG_CONFIG_PATH:-}"
+                SLIRP_OK=1
+                echo -e "\r${G}✔${W} libslirp từ conda xong          "
+            fi
+        fi
+    fi
+
+    # Fallback: tải tarball
+    if [[ "$SLIRP_OK" == "0" ]]; then
+        mkdir -p "$BUILD/qemu-11.0.0/subprojects"
+        wget -c -qO- \
+            "https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.7.0/libslirp-v4.7.0.tar.gz" \
+            | tar xz -C "$BUILD/qemu-11.0.0/subprojects/" > /dev/null 2>&1 \
+            && mv "$BUILD/qemu-11.0.0/subprojects/libslirp-v4.7.0" \
+                  "$BUILD/qemu-11.0.0/subprojects/libslirp" \
+            && SLIRP_OK=1 \
+            && echo -e "\r${G}✔${W} libslirp tarball xong          "
+    fi
+
+    # Fallback cuối: git clone
+    if [[ "$SLIRP_OK" == "0" ]]; then
+        git clone -q --depth 1 \
+            https://gitlab.freedesktop.org/slirp/libslirp.git \
+            "$BUILD/qemu-11.0.0/subprojects/libslirp" > /dev/null 2>&1 \
+            && SLIRP_OK=1 \
+            && echo -e "\r${G}✔${W} libslirp git xong          " \
+            || { echo -e "\r${R}✘${W} libslirp thất bại toàn bộ"; exit 1; }
+    fi
+    spin_stop "libslirp xong"
+
+    # ── Set PKG_CONFIG_PATH đầy đủ trước khi configure QEMU ─────
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        # Tìm glib-2.0.pc từ conda
+        CONDA_GLIB_DIR=$(dirname "$(find "$CONDA_PREFIX" -name "glib-2.0.pc" 2>/dev/null | grep "lib/pkgconfig" | head -1)")
+        if [[ -n "$CONDA_GLIB_DIR" && "$CONDA_GLIB_DIR" != "." ]]; then
+            export PKG_CONFIG_PATH="$CONDA_GLIB_DIR:${PKG_CONFIG_PATH:-}"
+            echo -e "${G}✔${W} glib từ conda: $CONDA_GLIB_DIR"
+        fi
+
+        # Thêm conda lib/pkgconfig chung
+        for d in \
+            "$CONDA_PREFIX/lib/pkgconfig" \
+            "$CONDA_PREFIX/lib64/pkgconfig"; do
+            [[ -d "$d" ]] && export PKG_CONFIG_PATH="$d:${PKG_CONFIG_PATH:-}"
+        done
+    else
+        # Từ build source
+        for d in \
+            "$PREFIX/lib/pkgconfig" \
+            "$PREFIX/lib64/pkgconfig"; do
+            [[ -d "$d" ]] && export PKG_CONFIG_PATH="$d:${PKG_CONFIG_PATH:-}"
+        done
+    fi
+
+    # Thêm PREFIX lib/pkgconfig
+    for d in \
+        "$PREFIX/lib/pkgconfig" \
+        "$PREFIX/lib64/pkgconfig"; do
+        [[ -d "$d" ]] && export PKG_CONFIG_PATH="$d:${PKG_CONFIG_PATH:-}"
+    done
+    export PKG_CONFIG_PATH="${PKG_CONFIG_PATH%:}"  # trim trailing colon
+
+    echo -e "${B}ℹ${W}  PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+
+    # ── Chuẩn bị CFLAGS/LDFLAGS ────────────────────────────────
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        CONDA_INC="$CONDA_PREFIX/include"
+        CONDA_LIB="$CONDA_PREFIX/lib"
+    else
+        CONDA_INC="$PREFIX/include"
+        CONDA_LIB="$PREFIX/lib"
+    fi
+    
+    QEMU_EXTRA_CFLAGS="-I$PREFIX/include -I${PIXMAN_INC:-$CONDA_INC/pixman-1} -I$CONDA_INC"
+    QEMU_EXTRA_LDFLAGS="-L$PREFIX/lib64 -L$PREFIX/lib -L$CONDA_LIB -Wl,-rpath,$CONDA_LIB"
+
+    echo -ne "${B}◜${W} Configure QEMU rootless..."
+    cd "$BUILD/qemu-11.0.0"
+    rm -rf build   # xóa build dir cũ nếu có
+
+    # ── Rootless: thêm --enable-opengl nếu có virglrenderer ──
+    local GL_OPT="--disable-opengl"
+    if pkg-config --exists virglrenderer 2>/dev/null; then
+        GL_OPT="--enable-opengl --enable-virglrenderer"
+        echo -e "${G}✔${W} virglrenderer found — enable OpenGL/virgl for GPU emulation"
+    fi
+
+    ./configure \
+        --prefix="$PREFIX" \
+        --python="$(command -v python3)" \
+        --target-list=x86_64-softmmu \
+        --enable-tcg \
+        --disable-kvm \
+        --disable-werror \
+        --disable-gtk \
+        --disable-sdl \
+        $GL_OPT \
+        --enable-slirp \
+        --enable-vnc \
+        --disable-libusb \
+        --disable-capstone \
+        --extra-cflags="$QEMU_EXTRA_CFLAGS" \
+        --extra-ldflags="$QEMU_EXTRA_LDFLAGS" \
+        > /tmp/qemu-configure.log 2>&1
+    if [[ $? -ne 0 ]]; then
+        echo -e "\r${R}✘${W} Configure QEMU thất bại — xem /tmp/qemu-configure.log"
+        exit 1
+    fi
+    echo -e "\r${G}✔${W} Configure QEMU xong          "
+
+    echo ""
+    echo -e "${C}════════════════════════════════════${W}"
+    echo -e "${C}🔨 Compile QEMU (mất 10-20 phút)${W}"
+    echo -e "${C}════════════════════════════════════${W}"
+    make -j"$(nproc)" 2>&1 | grep --line-buffered -E "^\[|error:|warning:|FAILED"
+    if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+        echo -e "${R}✘ Compile QEMU thất bại — xem /tmp/qemu-build.log${W}"
+        make -j"$(nproc)" > /tmp/qemu-build.log 2>&1
+        exit 1
+    fi
+    make install > /dev/null 2>&1
+    strip "$PREFIX/bin/qemu-system-x86_64" 2>/dev/null || true
+    echo -e "${G}✔ QEMU rootless build xong${W}"
+
+    export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib64:$PREFIX/lib/x86_64-linux-gnu:$CONDA_LIB:${LD_LIBRARY_PATH:-}"
+    export QEMU_BIN="$PREFIX/bin/qemu-system-x86_64"
+    export PATH="$PREFIX/bin:$PATH"
+
+    # ── Cài aria2 ────────────────────────────────────────────────
+    if [[ $HAVE_CONDA -eq 1 ]]; then
+        spin_start "Cài aria2 từ conda..."
+        conda install -y -q aria2 > /dev/null 2>&1 \
+            && spin_stop "aria2 từ conda xong" \
+            || spin_fail "aria2 conda thất bại — bỏ qua, dùng wget"
+    else
+        echo -e "${B}ℹ${W}  build từ source — bỏ qua aria2, dùng wget để tải"
+    fi
+
+    echo -e "${G}✔ Rootless build hoàn tất${W}"
+    echo -e "   QEMU : $QEMU_BIN"
+    echo -e "   Python: $(python3 --version 2>&1)"
+}
+
+
+QEMU_BIN="/usr/bin/qemu-system-x86_64"
+ROOTLESS_QEMU="$HOME/qemu-static/bin/qemu-system-x86_64"
+
+# Detect package manager ngay từ đầu
+_detect_apt
+
+# ── Detect QEMU đã có từ bất kỳ nguồn nào ───────────────────
+_detect_existing_qemu() {
+    for q in \
+        "$QEMU_BIN" \
+        "$ROOTLESS_QEMU" \
+        "$(command -v qemu-system-x86_64 2>/dev/null)"; do
+        if [[ -n "$q" && -x "$q" ]]; then
+            local qv
+            qv=$("$q" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+            echo -e "${G}⚡ Tìm thấy QEMU v${qv} tại: $q${W}"
+            export QEMU_BIN="$q"
+            export PATH="$(dirname "$q"):$PATH"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if _detect_existing_qemu; then
+    choice=$(ask "👉 QEMU đã có sẵn. Bạn có muốn build lại không? (y/n): " "n")
+else
+    choice=$(ask "👉 Bạn có muốn build QEMU để tạo VM với tăng tốc LLVM không? (y/n): " "n")
+fi
+
+if [[ "$choice" == "y" ]]; then
+
+    # ── Nếu không có apt → rootless build rồi skip phần apt ──────
+    if [[ "$ROOTLESS" == "1" ]]; then
+        _rootless_build
+    elif [[ -x "$QEMU_BIN" ]]; then
+        BUILT_VER=$("$QEMU_BIN" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+        echo -e "${G}⚡ QEMU ULTRA v${BUILT_VER} đã tồn tại — bỏ qua build${W}"
+        export PATH="/opt/qemu-optimized/bin:$PATH"
+    else
+        # ── Cài dependencies — skip package đã có, hiện progress ────
+        echo ""
+        spin_start "Cập nhật apt cache..."
+        $APT_CMD update -qq > /dev/null 2>&1
+        spin_stop "apt cache đã cập nhật"
+
+        # Danh sách: "tên_hiển_thị|package_apt|lệnh_check"
+        DEPS=(
+            "lsb-release|lsb-release|lsb_release"
+            "wget|wget|wget"
+            "gnupg|gnupg|gpg"
+            "build-essential|build-essential|gcc"
+            "ninja-build|ninja-build|ninja"
+            "git|git|git"
+            "python3-venv|python3-venv|python3"
+            "python3-pip|python3-pip|pip3"
+            "pkg-config|pkg-config|pkg-config"
+            "aria2|aria2|aria2c"
+            "ovmf|ovmf|"
+            "libglib2.0-dev|libglib2.0-dev|"
+            "libpixman-1-dev|libpixman-1-dev|"
+            "zlib1g-dev|zlib1g-dev|"
+            "libslirp-dev|libslirp-dev|"
+            "meson|meson|meson"
+            "software-properties-common|software-properties-common|"
+            "genisoimage|genisoimage|genisoimage"
+            "libvirglrenderer-dev|libvirglrenderer-dev|"
+            "libegl1-mesa-dev|libegl1-mesa-dev|"
+            "libgbm-dev|libgbm-dev|"
+            "libepoxy-dev|libepoxy-dev|"
+            "mesa-utils|mesa-utils|glxinfo"
+            "pciutils|pciutils|lspci"
+        )
+
+        TOTAL=${#DEPS[@]}
+        IDX=0
+        for entry in "${DEPS[@]}"; do
+            IFS='|' read -r label pkg chk <<< "$entry"
+            IDX=$(( IDX + 1 ))
+            PREFIX_LABEL="[${IDX}/${TOTAL}]"
+
+            # Skip nếu lệnh check đã có sẵn
+            if [[ -n "$chk" ]] && command -v "$chk" &>/dev/null; then
+                echo -e "${G}✔${W} ${PREFIX_LABEL} ${label} ${B}(đã có)${W}"
+                continue
+            fi
+            # Skip nếu dpkg đã cài
+            if dpkg -s "$pkg" &>/dev/null 2>&1; then
+                echo -e "${G}✔${W} ${PREFIX_LABEL} ${label} ${B}(đã cài)${W}"
+                continue
+            fi
+
+            spin_start "Đang cài $label..."
+            if apt_install "$pkg"; then
+                spin_stop "$PREFIX_LABEL $label"
+            else
+                spin_fail "$PREFIX_LABEL $label thất bại — bỏ qua"
+            fi
+        done
+        echo -e "${G}✔ Tất cả dependencies đã sẵn sàng${W}"
+
+        # ── Thiết lập LLVM 16 (chỉ apt, không repo ngoài) ────────
+        spin_start "Cài LLVM 16 (clang, lld, llvm)..."
+        export DEBIAN_FRONTEND=noninteractive
+        if silent $APT_CMD install -y clang-16 lld-16 llvm-16 llvm-16-dev llvm-16-tools; then
+            spin_stop "LLVM 16 đã cài"
+        else
+            spin_fail "LLVM 16 cài thất bại — kiểm tra apt"
+            exit 1
+        fi
+
+        export PATH="/usr/lib/llvm-16/bin:$PATH"
+        export CC="clang-16"
+        export CXX="clang++-16"
+        export LD="lld-16"
+
+        if command -v lld-16 &>/dev/null; then
+            LLD_AVAILABLE=1
+            echo -e "${G}✔ lld-16 tìm thấy${W}"
+        else
+            LLD_AVAILABLE=0
+            echo -e "${Y}⚠️  lld-16 không tìm thấy, fallback sang ld mặc định${W}"
+        fi
+
+        # ── Build glib nếu quá cũ (chỉ 1 lần) ───────────────────
+        GLIB_VER=$(pkg-config --modversion glib-2.0 2>/dev/null || echo "0.0.0")
+        if ver_lt "$GLIB_VER" "2.66"; then
+            echo -e "${Y}⚠️  glib hiện tại: $GLIB_VER — quá cũ, build glib 2.76.6${W}"
+
+            spin_start "Tải source glib 2.76.6..."
+            silent sudo apt-get install -y libffi-dev gettext
+            cd /tmp
+            silent wget -q https://download.gnome.org/sources/glib/2.76/glib-2.76.6.tar.xz
+            spin_stop "Tải glib xong"
+
+            spin_start "Giải nén glib..."
+            silent tar -xf glib-2.76.6.tar.xz
+            spin_stop "Giải nén xong"
+
+            spin_start "Build & install glib 2.76.6 (mất vài phút)..."
+            cd glib-2.76.6
+            silent meson setup build --prefix=/usr/local
+            silent ninja -C build
+            silent sudo ninja -C build install
+            spin_stop "glib 2.76.6 đã cài"
+
+            export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH:-}"
+            GLIB_NEW=$(pkg-config --modversion glib-2.0 2>/dev/null || echo "unknown")
+            echo -e "${G}✔ glib mới: $GLIB_NEW${W}"
+        else
+            echo -e "${G}✔ glib đủ yêu cầu: $GLIB_VER${W}"
+        fi
+
+        # ── Python venv + meson (chỉ tạo 1 lần) ─────────────────
+        # Detect đúng version Python đang dùng rồi cài python3.X-venv
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        echo -e "${B}ℹ${W} Python version: ${PY_VER}"
+
+        VENV_PKG="python${PY_VER}-venv"
+        if ! dpkg -s "$VENV_PKG" &>/dev/null 2>&1; then
+            echo -ne "${B}◜${W} Cài ${VENV_PKG}..."
+            sudo apt-get install -y -qq "$VENV_PKG" > /dev/null 2>&1
+            echo -e "\r${G}✔${W} ${VENV_PKG} đã cài          "
+        else
+            echo -e "${G}✔${W} ${VENV_PKG} đã có"
+        fi
+
+        # Xóa venv cũ nếu bị broken
+        if [[ -d ~/qemu-env ]] && [[ ! -f ~/qemu-env/bin/activate ]]; then
+            echo -e "${Y}⚠${W} venv cũ bị broken — xóa và tạo lại"
+            rm -rf ~/qemu-env
+        fi
+
+        if [[ ! -f ~/qemu-env/bin/activate ]]; then
+            echo -ne "${B}◜${W} Tạo Python venv..."
+            python3 -m venv ~/qemu-env > /tmp/venv-create.log 2>&1
+            venv_exit=$?
+            if [[ $venv_exit -eq 0 ]]; then
+                echo -e "\r${G}✔${W} Python venv đã tạo          "
+            else
+                echo -e "\r${R}✘${W} Tạo venv thất bại:"
+                cat /tmp/venv-create.log
+                exit 1
+            fi
+        else
+            echo -e "${G}✔${W} Python venv đã tồn tại — bỏ qua"
+        fi
+
+        source ~/qemu-env/bin/activate
+
+        echo -ne "${B}◜${W} Cài meson / ninja trong venv..."
+        {
+            pip install --upgrade pip tomli packaging
+            pip install meson ninja
+            sudo apt-get remove -y meson 2>/dev/null || true
+            hash -r
+        } > /tmp/pip-install.log 2>&1
+        echo -e "\r${G}✔${W} meson / ninja sẵn sàng          "
+
+        # ── Tải QEMU source (chỉ 1 lần) ──────────────────────────
+        if [[ ! -d /tmp/qemu-src ]]; then
+            spin_start "Tải source QEMU v11.0.0..."
+            silent git clone --depth 1 --branch v11.0.0 \
+                https://gitlab.com/qemu-project/qemu.git /tmp/qemu-src
+            spin_stop "Tải source QEMU xong"
+        else
+            echo -e "${G}✔ Source QEMU đã có tại /tmp/qemu-src — bỏ qua clone${W}"
+        fi
+
+        # ── Configure (chỉ 1 lần) ─────────────────────────────────
+        rm -rf /tmp/qemu-build
+        mkdir -p /tmp/qemu-build
+        cd /tmp/qemu-build
+
+        # TCG_TB_SIZE compile-time = 256MB để khớp runtime
+        TCG_TB_COMPILE=$(( 256 * 1024 * 1024 ))
+
+        EXTRA_CFLAGS="-Ofast -march=native -mtune=native -pipe \
+-flto=full -ffast-math -fuse-ld=lld \
+-fmerge-all-constants -fno-semantic-interposition \
+-fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables \
+-fno-stack-protector -funsafe-math-optimizations \
+-ffinite-math-only -fno-math-errno -fstrict-aliasing \
+-funroll-loops -finline-functions -finline-hint-functions \
+-fvectorize -fslp-vectorize \
+-mllvm -inline-threshold=500 \
+-mllvm -unroll-count=8 \
+-mllvm -enable-gvn-hoist=1 \
+-mllvm -enable-load-pre=1 \
+-DNDEBUG \
+-DDEFAULT_TCG_TB_SIZE=${TCG_TB_COMPILE} \
+-DTCG_TARGET_REG_BITS=64 \
+-DCONFIG_TCG_INTERPRETER=0"
+        LDFLAGS="-flto=full -fuse-ld=lld -Wl,--lto-O3 -Wl,--gc-sections -Wl,--icf=all -Wl,-O3 -Wl,--thinlto-cache-dir=/tmp/lto-cache"
+
+        # ── Detect virglrenderer cho OpenGL/3D support ──────────
+        GL_OPTS="--disable-opengl"
+        if pkg-config --exists virglrenderer 2>/dev/null; then
+            GL_OPTS="--enable-opengl --enable-virglrenderer"
+            echo -e "${G}✔ virglrenderer found — enabling OpenGL for GPU emulation${W}"
+        elif pkg-config --exists epoxy 2>/dev/null; then
+            GL_OPTS="--enable-opengl"
+            echo -e "${G}✔ libepoxy found — enabling basic OpenGL${W}"
+        else
+            echo -e "${Y}⚠ No OpenGL support — GPU emulation will use software rendering${W}"
+        fi
+
+        spin_start "Configure QEMU..."
+        ../qemu-src/configure \
+            --prefix=/opt/qemu-optimized \
+            --target-list=x86_64-softmmu \
+            --enable-tcg \
+            --enable-slirp \
+            --enable-lto \
+            --enable-coroutine-pool \
+            --enable-vnc \
+            $GL_OPTS \
+            --disable-kvm \
+            --disable-mshv \
+            --disable-xen \
+            --disable-gtk \
+            --disable-sdl \
+            --disable-spice \
+            --disable-plugins \
+            --disable-debug-info \
+            --disable-docs \
+            --disable-werror \
+            --disable-fdt \
+            --disable-vdi \
+            --disable-vvfat \
+            --disable-cloop \
+            --disable-dmg \
+            --disable-pa \
+            --disable-alsa \
+            --disable-oss \
+            --disable-jack \
+            --disable-gnutls \
+            --disable-smartcard \
+            --disable-libusb \
+            --disable-seccomp \
+            --disable-modules \
+            CC="$CC" CXX="$CXX" LD="$LD" \
+            CFLAGS="$EXTRA_CFLAGS" CXXFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS" \
+            > /tmp/qemu-configure.log 2>&1
+        spin_stop "Configure xong"
+
+        # ── Compile (1 lần, không lặp) ────────────────────────────
+        ulimit -n 84857 2>/dev/null || true
+        NCPU=$(nproc)
+        spin_start "Đang compile QEMU với ${NCPU} cores (mất 5-20 phút)..."
+        if ninja -j"$NCPU" > /tmp/qemu-build.log 2>&1; then
+            spin_stop "Compile QEMU xong"
+        else
+            spin_fail "Compile QEMU thất bại — xem log: /tmp/qemu-build.log"
+            exit 1
+        fi
+
+        spin_start "Cài đặt QEMU vào /opt/qemu-optimized..."
+        if sudo ninja install > /dev/null 2>&1; then
+            spin_stop "Cài đặt QEMU hoàn tất"
+        else
+            spin_fail "Cài đặt thất bại"
+            exit 1
+        fi
+
+        export PATH="/opt/qemu-optimized/bin:$PATH"
+        echo -e "${G}🔥 QEMU LLVM build xong! $($QEMU_BIN --version | head -1)${W}"
+    fi
+else
+    echo -e "${Y}⚡ Bỏ qua build QEMU.${W}"
+fi
+
+# ── Đảm bảo QEMU tìm thấy ────────────────────────────────────
+[[ -x "$QEMU_BIN" ]] && export PATH="/opt/qemu-optimized/bin:$PATH"
+
+# ════════════════════════════════════════════════════════════════
+#  MENU CHÍNH
+# ════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${C}════════════════════════════════════${W}"
+echo -e "${C}🖥️  WINDOWS VM MANAGER  v14${W}"
+echo -e "${C}════════════════════════════════════${W}"
+echo "1️⃣  Tạo Windows VM"
+echo "2️⃣  Quản Lý Windows VM"
+echo -e "${C}════════════════════════════════════${W}"
+read -rp "👉 Nhập lựa chọn [1-2]: " main_choice
+
+case "$main_choice" in
+2)
+    echo ""
+    echo -e "${C}🚀 ===== MANAGE RUNNING VM =====${W}"
+
+    if pgrep -f 'qemu-system-x86_64' > /dev/null; then
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            vcpu=$(sed -n 's/.*-smp \([^ ,]*\).*/\1/p' <<< "$cmd")
+            ram=$(sed -n  's/.*-m \([^ ]*\).*/\1/p'    <<< "$cmd")
+            cpu=$(ps -p "$pid" -o %cpu= 2>/dev/null || echo "?")
+            mem=$(ps -p "$pid" -o %mem= 2>/dev/null || echo "?")
+            echo -e "🆔 PID: ${Y}${pid}${W}  |  vCPU: ${B}${vcpu}${W}  |  RAM: ${B}${ram}${W}  |  CPU: ${G}${cpu}%${W}  |  MEM: ${R}${mem}%${W}"
+        done < <(pgrep -f 'qemu-system-x86_64')
+    else
+        echo -e "${R}❌ Không có VM nào đang chạy${W}"
+    fi
+
+    echo -e "${C}==================================${W}"
+    read -rp "🆔 Nhập PID VM muốn tắt (hoặc Enter để bỏ qua): " kill_pid
+    if [[ -n "$kill_pid" && -d "/proc/$kill_pid" ]]; then
+        kill "$kill_pid" 2>/dev/null || true
+        echo -e "${G}✅ Đã gửi tín hiệu tắt VM PID $kill_pid${W}"
+    fi
+    exit 0
+    ;;
+esac
+
+# ════════════════════════════════════════════════════════════════
+#  CHỌN PHIÊN BẢN WINDOWS
+# ════════════════════════════════════════════════════════════════
+echo ""
+echo "🪟 Chọn phiên bản Windows muốn tải:"
+echo "1️⃣  Windows Server 2012 R2 x64"
+echo "2️⃣  Windows Server 2022 x64"
+echo "3️⃣  Windows 11 LTSB x64"
+echo "4️⃣  Windows 10 LTSB 2015 x64"
+echo "5️⃣  Windows 10 LTSC 2023 x64"
+read -rp "👉 Nhập số [1-5]: " win_choice
+
+case "$win_choice" in
+1) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no"  ;;
+2) WIN_NAME="Windows Server 2022";    WIN_URL="https://archive.org/download/tamnguyen-2022/2022.img";   USE_UEFI="no"  ;;
+3) WIN_NAME="Windows 11 LTSB";        WIN_URL="https://archive.org/download/win_20260203/win.img";       USE_UEFI="yes" ;;
+4) WIN_NAME="Windows 10 LTSB 2015";   WIN_URL="https://archive.org/download/win_20260208/win.img";       USE_UEFI="no"  ;;
+5) WIN_NAME="Windows 10 LTSC 2023";   WIN_URL="https://archive.org/download/win_20260215/win.img";       USE_UEFI="no"  ;;
+*) WIN_NAME="Windows Server 2012 R2"; WIN_URL="https://archive.org/download/tamnguyen-2012r2/2012.img"; USE_UEFI="no"  ;;
+esac
+
+case "$win_choice" in
+3|4|5) RDP_USER="Admin";         RDP_PASS="Tam255Z"         ;;
+*)     RDP_USER="administrator"; RDP_PASS="Tamnguyenyt@123" ;;
+esac
+
+if [[ ! -f win.img ]]; then
+    echo ""
+    echo -e "${C}════════════════════════════════════${W}"
+    echo -e "${C}⬇  Đang tải: ${Y}$WIN_NAME${W}"
+    echo -e "${C}════════════════════════════════════${W}"
+    if command -v aria2c &>/dev/null; then
+        aria2c \
+            -x16 -s16 -j16 \
+            --continue=true \
+            --file-allocation=none \
+            --console-log-level=notice \
+            --summary-interval=3 \
+            --human-readable=true \
+            --download-result=full \
+            "$WIN_URL" -o win.img
+    else
+        echo -e "${Y}⚠${W}  aria2c không có — dùng wget..."
+        wget --progress=bar:force --continue "$WIN_URL" -O win.img
+    fi
+    echo -e "${G}✔ Tải $WIN_NAME xong${W}"
+else
+    echo -e "${G}✔ win.img đã tồn tại — bỏ qua tải${W}"
+fi
+
+read -rp "📦 Mở rộng đĩa thêm bao nhiêu GB (default 20)? " extra_gb
+extra_gb="${extra_gb:-20}"
+
+spin_start "Resize disk +${extra_gb}GB..."
+silent qemu-img resize win.img "+${extra_gb}G"
+spin_stop "Resize disk xong"
+
+# ════════════════════════════════════════════════════════════════
+#  CẤU HÌNH VM
+# ════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${C}════════════════════════════════════${W}"
+echo -e "${C}⚙  CHỌN CHẾ ĐỘ CẤU HÌNH VM${W}"
+echo -e "${C}════════════════════════════════════${W}"
+echo "1️⃣  Auto cấu hình (khuyên dùng)"
+echo "2️⃣  Tự chọn thủ công"
+echo -e "${C}════════════════════════════════════${W}"
+read -rp "👉 Nhập lựa chọn [1-2]: " cfg_mode
+
+if [[ "$cfg_mode" == "1" ]]; then
+    spin_start "Auto detect tài nguyên host..."
+
+    cpu_v=$(nproc 2>/dev/null)
+    cpu_u=$cpu_v
+
+    if [[ -f /sys/fs/cgroup/cpu.max ]]; then
+        IFS=" " read -r cq cp < /sys/fs/cgroup/cpu.max
+        [[ "$cq" != "max" ]] && cpu_u=$(awk "BEGIN{printf \"%.0f\",$cq/$cp}")
+    elif [[ -f /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]]; then
+        cq=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+        cp=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+        [[ "$cq" != "-1" ]] && cpu_u=$(awk "BEGIN{printf \"%.0f\",$cq/$cp}")
+    fi
+    [[ "$cpu_u" -lt 1 ]] && cpu_u=1
+
+    mem_total_gb=$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo)
+    mem_auto_gb=$(awk "BEGIN{printf \"%d\", ($mem_total_gb*0.85)+0.5}")
+    [[ "$mem_auto_gb" -lt 2 ]] && mem_auto_gb=2
+    max_ram=$(( mem_total_gb - 1 ))
+    [[ "$mem_auto_gb" -gt "$max_ram" ]] && mem_auto_gb=$max_ram
+
+    cpu_core=$cpu_u
+    ram_size=$mem_auto_gb
+    spin_stop "Auto detect xong"
+
+    echo "   🖥️  CPU : ${cpu_v} cores (usable: ${cpu_core})"
+    echo "   💾 RAM : ${mem_total_gb}GB total → VM ${ram_size}GB"
+else
+    read -rp "⚙  CPU core (default 4): " cpu_core;  cpu_core="${cpu_core:-4}"
+    read -rp "💾 RAM GB   (default 4): " ram_size;  ram_size="${ram_size:-4}"
+fi
+
+# TCG TB cache: scale theo RAM, tối đa 25% RAM, cap 256MB
+# QUAN TRỌNG: QEMU tb-size nhận đơn vị MB, KHÔNG phải bytes
+TCG_TB_MB=$(( ram_size * 1024 / 4 ))   # 25% RAM tính theo MB
+[[ "$TCG_TB_MB" -lt 64  ]] && TCG_TB_MB=64
+[[ "$TCG_TB_MB" -gt 256 ]] && TCG_TB_MB=256
+echo -e "${G}⚡ TCG TB cache: ${TCG_TB_MB}MB (25% of ${ram_size}GB RAM)${W}"
+
+# ── CPU flags ─────────────────────────────────────────────────
+cpu_host=$(grep -m1 "model name" /proc/cpuinfo | sed 's/^.*: //')
+cpu_host="${cpu_host//,/ }"
+CPU_EXTRA=""
+grep -q ssse3  /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+ssse3"
+grep -q sse4_1 /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+sse4.1"
+grep -q sse4_2 /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+sse4.2"
+grep -q rdtscp /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+rdtscp"
+grep -q ' avx ' /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+avx"
+grep -q avx2   /proc/cpuinfo && CPU_EXTRA="$CPU_EXTRA,+avx2"
+# invtsc không được TCG hỗ trợ → bỏ để tránh warning
+cpu_model="qemu64,hypervisor=off,tsc=on,pmu=off,l3-cache=on,+cmov,+mmx,+fxsr,+sse2,+cx16,+x2apic,+sep,+pat,+pse,+aes,+popcnt${CPU_EXTRA},model-id=${cpu_host// /_}"
+
+# ── Network ───────────────────────────────────────────────────
+[[ "$win_choice" == "4" ]] \
+    && NET_DEVICE="-device e1000e,netdev=n0" \
+    || NET_DEVICE="-device virtio-net-pci,netdev=n0"
+
+# ── BIOS/UEFI ─────────────────────────────────────────────────
+[[ "$USE_UEFI" == "yes" ]] \
+    && BIOS_OPT="-bios /usr/share/qemu/OVMF.fd" \
+    || BIOS_OPT=""
+
+# ════════════════════════════════════════════════════════════════
+#  GPU EMULATION — Hỏi người dùng trước khi khởi VM
+# ════════════════════════════════════════════════════════════════
+_gpu_emulation_menu "$ROOTLESS"
+
+# ════════════════════════════════════════════════════════════════
+#  KHỞI ĐỘNG VM
+# ════════════════════════════════════════════════════════════════
+
+# ── Xây dựng QEMU command line ────────────────────────────────
+# Nếu GPU emulation được chọn, dùng GPU_ARGS thay cho -vga virtio
+if [[ -n "$GPU_ARGS" ]]; then
+    # GPU emulation mode: dùng -device thay -vga
+    VGA_OPT=""      # không dùng -vga legacy
+    DISPLAY_OPT="$GPU_DISPLAY_ARGS"
+    GPU_EXTRA="$GPU_ARGS"
+    SMBIOS_GPU_OPT="$GPU_SMBIOS_GPU"
+else
+    # Default: dùng virtio VGA
+    VGA_OPT="-vga virtio"
+    DISPLAY_OPT="-display none"
+    GPU_EXTRA=""
+    SMBIOS_GPU_OPT=""
+fi
+
+# ── Set LLVMpipe environment cho QEMU host process ───────────
+# Nếu GPU emulation + virgl, force LLVMpipe làm software 3D backend
+if [[ -n "$GPU_ARGS" ]]; then
+    export GALLIUM_DRIVER=llvmpipe
+    export LP_NUM_THREADS=$(nproc)
+    export MESA_GL_VERSION_OVERRIDE=4.5
+    export MESA_GLSL_VERSION_OVERRIDE=450
+    export LIBGL_ALWAYS_SOFTWARE=1
+    echo -e "${B}ℹ LLVMpipe environment set (GALLIUM_DRIVER=llvmpipe, GL 4.5)${W}"
+fi
+
+spin_start "Khởi động VM ${WIN_NAME} ${GPU_NAME:+(GPU: $GPU_NAME)}..."
+
+# Build command array
+QEMU_CMD=(
+    ${QEMU_BIN:-qemu-system-x86_64}
+    -machine q35,hpet=off
+    -cpu "$cpu_model"
+    -smp "$cpu_core"
+    -m "${ram_size}G"
+    -accel tcg,thread=multi,tb-size=$TCG_TB_MB
+    -rtc base=localtime
+)
+
+# BIOS/UEFI
+[[ -n "$BIOS_OPT" ]] && QEMU_CMD+=($BIOS_OPT)
+
+# Disk
+QEMU_CMD+=(
+    -drive file=win.img,if=virtio,cache=unsafe,aio=threads,format=raw
+)
+
+# Network
+QEMU_CMD+=(
+    -netdev user,id=n0,hostfwd=tcp::3389-:3389
+    $NET_DEVICE
+)
+
+# Input devices
+QEMU_CMD+=(
+    -device virtio-mouse-pci
+    -device virtio-keyboard-pci
+)
+
+# Display & VGA
+# Khi dùng -nodefaults, phải thêm lại các device cơ bản
+QEMU_CMD+=(-nodefaults)
+# Thêm lại serial/monitor để debug nếu cần
+QEMU_CMD+=(-serial none -monitor none)
+
+if [[ -n "$GPU_EXTRA" ]]; then
+    # GPU emulation: dùng GPU_EXTRA (có thể là -vga std hoặc -device ...)
+    QEMU_CMD+=($GPU_EXTRA)
+    QEMU_CMD+=($DISPLAY_OPT)
+else
+    QEMU_CMD+=($DISPLAY_OPT)
+fi
+
+# SMBIOS
+QEMU_CMD+=(
+    -global ICH9-LPC.disable_s3=1
+    -global ICH9-LPC.disable_s4=1
+    -smbios type=1,manufacturer="Dell Inc.",product="PowerEdge R640"
+)
+[[ -n "$SMBIOS_GPU_OPT" ]] && QEMU_CMD+=("$SMBIOS_GPU_OPT")
+
+# Misc — KHÔNG dùng kvm-pit khi chạy TCG (không có KVM)
+# KHÔNG dùng -daemonize vì conflict với -display none trên một số QEMU build
+# Thay bằng nohup background
+QEMU_CMD+=(
+    -no-user-config
+)
+
+# Execute — log lỗi thay vì nuốt im lặng
+QEMU_LOG="/tmp/qemu-launch.log"
+echo "QEMU CMD: ${QEMU_CMD[*]}" > "$QEMU_LOG"
+nohup "${QEMU_CMD[@]}" >> "$QEMU_LOG" 2>&1 &
+QEMU_PID=$!
+disown "$QEMU_PID"
+
+sleep 4
+if kill -0 "$QEMU_PID" 2>/dev/null; then
+    spin_stop "VM đã khởi động (PID: $QEMU_PID)"
+else
+    spin_fail "VM KHÔNG khởi động được!"
+    echo -e "${R}═══ QEMU ERROR LOG ═══${W}"
+    cat "$QEMU_LOG"
+    echo -e "${R}═══════════════════════${W}"
+    echo -e "${Y}Tip: Xem log đầy đủ tại $QEMU_LOG${W}"
+    exit 1
+fi
+
+# ════════════════════════════════════════════════════════════════
+#  TUNNEL RDP
+# ════════════════════════════════════════════════════════════════
+use_rdp=$(ask "🛰️  Mở port tunnel để kết nối RDP? (y/n): " "n")
+
+if [[ "$use_rdp" == "y" ]]; then
+    spin_start "Cài tmux..."
+    if [[ "$APT_OK" == "1" ]]; then
+        silent $APT_CMD install -y tmux
+    elif command -v conda &>/dev/null; then
+        silent conda install -y -q tmux
+    fi
+    spin_stop "tmux sẵn sàng"
+
+    spin_start "Tải kami-tunnel..."
+    silent wget -q https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
+    silent tar -xzf kami-tunnel-linux-amd64.tar.gz
+    silent chmod +x kami-tunnel
+    spin_stop "kami-tunnel sẵn sàng"
+
+    spin_start "Tạo tunnel RDP port 3389..."
+    tmux kill-session -t kami 2>/dev/null || true
+    tmux new-session -d -s kami "./kami-tunnel 3389"
+    sleep 5
+    spin_stop "Tunnel đang chạy"
+
+    PUBLIC=$(tmux capture-pane -pt kami -p | \
+        sed 's/\x1b\[[0-9;]*m//g' | \
+        grep -i 'public' | \
+        grep -oE '[a-zA-Z0-9.\-]+:[0-9]+' | head -n1)
+
+    echo ""
+    echo -e "${C}══════════════════════════════════════════════${W}"
+    echo -e "${C}🚀 WINDOWS VM DEPLOYED SUCCESSFULLY  [v14]${W}"
+    echo -e "${C}══════════════════════════════════════════════${W}"
+    echo -e "🪟 OS           : ${Y}$WIN_NAME${W}"
+    echo -e "⚙  CPU Cores    : ${B}$cpu_core${W}"
+    echo -e "💾 RAM          : ${B}${ram_size} GB${W}"
+    echo -e "🧠 CPU Host     : $cpu_host"
+    echo -e "⚡ TCG TB Cache  : ${TCG_TB_MB}MB"
+    if [[ -n "$GPU_NAME" && "$GPU_NAME" != "Default VirtIO VGA" ]]; then
+        echo -e "🎮 GPU Emulated : ${G}${GPU_NAME}${W}"
+        if [[ "$GPU_PROFILE" == "minecraft" ]]; then
+            echo -e "   Mode        : ${B}Minecraft 3D profile${W}"
+        else
+            echo -e "   GPU Backend  : ${B}LLVMpipe Software 3D${W}"
+        fi
+    fi
+    echo -e "${C}──────────────────────────────────────────────${W}"
+    echo -e "📡 RDP Address  : ${G}${PUBLIC:-<chờ tunnel>}${W}"
+    echo -e "👤 Username     : ${Y}$RDP_USER${W}"
+    echo -e "🔑 Password     : ${Y}$RDP_PASS${W}"
+    echo -e "${C}══════════════════════════════════════════════${W}"
+    echo -e "${G}🟢 Status       : RUNNING${W}"
+    echo "⏱  GUI Mode     : Headless / RDP"
+    if [[ -n "$GPU_NAME" && "$GPU_NAME" != "Default VirtIO VGA" ]]; then
+        echo ""
+        echo -e "${Y}📋 GPU SETUP (chạy trong VM):${W}"
+        echo -e "   1. Mở File Explorer → CD drive 'GPU_SETUP'"
+        echo -e "   2. Chạy ${B}gpu-setup.bat${W} với quyền Administrator"
+        echo -e "   3. Restart VM để Task Manager hiển thị GPU"
+        echo -e "   4. Nếu mục tiêu là Minecraft, cài thêm driver OpenGL/3D của Windows guest phù hợp${W}"
+    fi
+    echo -e "${C}══════════════════════════════════════════════${W}"
+fi
